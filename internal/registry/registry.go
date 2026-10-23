@@ -13,6 +13,7 @@ import (
 	"github.com/simonfrey/exposure-scanner/internal/discovery/staticlist"
 	"github.com/simonfrey/exposure-scanner/internal/model"
 	"github.com/simonfrey/exposure-scanner/internal/scanners/cvelookup"
+	"github.com/simonfrey/exposure-scanner/internal/scanners/exploitintel"
 	"github.com/simonfrey/exposure-scanner/internal/scanners/httpx"
 	"github.com/simonfrey/exposure-scanner/internal/scanners/naabu"
 	"github.com/simonfrey/exposure-scanner/internal/scanners/nuclei"
@@ -38,10 +39,11 @@ var discoverers = map[string]func(config.Options) (Discoverer, error){
 }
 
 var scanners = map[string]func(config.Options) (Scanner, error){
-	"naabu":      adapt[Scanner](naabu.New),
-	"httpx":      adapt[Scanner](httpx.New),
-	"nuclei":     adapt[Scanner](nuclei.New),
-	"cve_lookup": adapt[Scanner](cvelookup.New),
+	"naabu":         adapt[Scanner](naabu.New),
+	"httpx":         adapt[Scanner](httpx.New),
+	"nuclei":        adapt[Scanner](nuclei.New),
+	"cve_lookup":    adapt[Scanner](cvelookup.New),
+	"exploit_intel": adapt[Scanner](exploitintel.New),
 }
 
 // Discoverers builds the configured discovery modules in order.

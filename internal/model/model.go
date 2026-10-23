@@ -41,6 +41,8 @@ type Finding struct {
 	Target     string
 	Scanner    string
 	Tags       []string // nuclei template tags
+	Exploited  bool     // listed in CISA KEV (actively exploited)
+	EPSS       float64  // exploit probability within 30 days, 0..1
 	Raw        any      // stored as jsonb
 }
 
