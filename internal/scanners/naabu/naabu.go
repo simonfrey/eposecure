@@ -19,15 +19,21 @@ import (
 
 type Naabu struct {
 	TopPorts   string `yaml:"top_ports"`   // 100, 1000 or full
-	ExtraPorts string `yaml:"extra_ports"` // e.g. "8080,8443,9000-9100"
+	ExtraPorts string `yaml:"extra_ports"` // added to top_ports, e.g. "9000-9100"
 	Rate       int    `yaml:"rate"`        // packets per second, keep low for Cloud Armor
 	Retries    int    `yaml:"retries"`
 }
 
 func New(o config.Options) (*Naabu, error) {
-	n := &Naabu{TopPorts: "1000", Rate: 300, Retries: 3}
+	n := &Naabu{TopPorts: "1000", ExtraPorts: cloudPorts, Rate: 300, Retries: 3}
 	return n, o.Decode(n)
 }
+
+// cloudPorts are services often exposed by mistake on cloud hosts that are
+// not in nmap's top 1000: Docker, etcd, Kibana, RabbitMQ, CouchDB, Redis,
+// Kubernetes API and kubelet, ActiveMQ, Cassandra, Kafka, Alertmanager,
+// Elasticsearch, Memcached, MongoDB.
+const cloudPorts = "2375,2376,2379,2380,5601,5672,5984,6379,6443,8161,9042,9092,9093,9300,10250,11211,15672,27017,27018"
 
 func (n *Naabu) Name() string { return "naabu" }
 
