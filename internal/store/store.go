@@ -104,9 +104,11 @@ func (s *Store) FinishRun(ctx context.Context, id int64, snap model.Snapshot, ev
 				rows(snap.Endpoints, func(e model.Endpoint) []any {
 					return []any{id, e.Host, e.IP, e.Port, e.URL, e.HTTPStatus, e.Title, e.Tech, e.CPE, e.Scanner}
 				})},
-			{"findings", []string{"run_id", "template_id", "name", "severity", "matched_at", "target", "scanner", "raw"},
+			{"findings", []string{"run_id", "template_id", "name", "severity", "matched_at", "target", "scanner",
+				"tags", "exploited", "epss", "raw"},
 				rows(snap.Findings, func(f model.Finding) []any {
-					return []any{id, f.TemplateID, f.Name, f.Severity, f.MatchedAt, f.Target, f.Scanner, jsonb(f.Raw)}
+					return []any{id, f.TemplateID, f.Name, f.Severity, f.MatchedAt, f.Target, f.Scanner,
+						f.Tags, f.Exploited, f.EPSS, jsonb(f.Raw)}
 				})},
 			{"events", []string{"run_id", "type", "target", "port", "severity", "provider", "account", "resource", "detail"},
 				rows(events, func(e model.Event) []any {
@@ -144,17 +146,20 @@ func (s *Store) LastSnapshot(ctx context.Context) (model.Snapshot, error) {
 	if err != nil {
 		return snap, err
 	}
-	snap.Endpoints, err = query(ctx, s.db, `SELECT host, ip, port, url, title FROM endpoints WHERE run_id = $1`, id,
+	snap.Endpoints, err = query(ctx, s.db, `SELECT host, ip, port, coalesce(url, ''), coalesce(http_status, 0),
+		coalesce(title, ''), tech, cpe FROM endpoints WHERE run_id = $1`, id,
 		func(r pgx.CollectableRow) (e model.Endpoint, err error) {
-			err = r.Scan(&e.Host, &e.IP, &e.Port, &e.URL, &e.Title)
+			err = r.Scan(&e.Host, &e.IP, &e.Port, &e.URL, &e.HTTPStatus, &e.Title, &e.Tech, &e.CPE)
 			return
 		})
 	if err != nil {
 		return snap, err
 	}
-	snap.Findings, err = query(ctx, s.db, `SELECT template_id, name, severity, matched_at, target FROM findings WHERE run_id = $1`, id,
+	snap.Findings, err = query(ctx, s.db, `SELECT template_id, name, severity, matched_at, target, scanner,
+		tags, exploited, coalesce(epss, 0) FROM findings WHERE run_id = $1`, id,
 		func(r pgx.CollectableRow) (f model.Finding, err error) {
-			err = r.Scan(&f.TemplateID, &f.Name, &f.Severity, &f.MatchedAt, &f.Target)
+			err = r.Scan(&f.TemplateID, &f.Name, &f.Severity, &f.MatchedAt, &f.Target, &f.Scanner,
+				&f.Tags, &f.Exploited, &f.EPSS)
 			return
 		})
 	return snap, err

@@ -31,7 +31,8 @@ func Compute(prev, cur model.Snapshot) []model.Event {
 	findingEvent := func(typ string, f model.Finding) model.Event {
 		a := owner[f.Target]
 		return model.Event{Type: typ, Target: f.Target, Severity: f.Severity, Provider: a.Provider, Account: a.Account,
-			Resource: a.Name, Detail: map[string]any{"template_id": f.TemplateID, "name": f.Name, "matched_at": f.MatchedAt}}
+			Resource: a.Name, Detail: map[string]any{"template_id": f.TemplateID, "name": f.Name, "matched_at": f.MatchedAt,
+				"tags": f.Tags, "exploited": f.Exploited, "epss": f.EPSS}}
 	}
 	addedF, removedF := delta(prev.Findings, cur.Findings, func(f model.Finding) string {
 		return f.TemplateID + "|" + f.MatchedAt
