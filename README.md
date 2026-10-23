@@ -3,11 +3,12 @@
 Finds everything you expose to the internet and scans it from the outside, like an attacker would.
 Discovery covers cloud inventories (GCP, AWS, Azure, … via [cloudlist]) and DNS. Scanning uses
 ProjectDiscovery's [naabu], [httpx] and [nuclei] as Go libraries, plus a CVE lookup for detected
-software versions. Results go to Postgres. Grafana shows the dashboard and sends Slack alerts.
+software versions, ranked by whether they are exploited in the wild (CISA KEV, EPSS). Results go
+to Postgres. Grafana shows the dashboard and sends Slack alerts.
 
 ```
 cloudlist (gcp, aws, …) ─┐
-gcp_asset_search        ─┼─→ assets → targets ─→ naabu → httpx → nuclei → cve_lookup
+gcp_asset_search        ─┼─→ assets → IPs ─→ naabu → httpx → nuclei → cve_lookup → exploit_intel
 dns (subfinder + dnsx)  ─┤                                   │
 static_list             ─┘                                   ▼
                                        Postgres (runs, assets, endpoints, findings, events + views)
@@ -33,13 +34,24 @@ To trigger a run by hand: `docker compose run --rm scanner run-once`.
 ## How a run works
 
 1. All discovery modules run in parallel and return assets (provider, account, kind, name, target).
-2. Targets are normalized, deduplicated and filtered by `exclude`.
+2. Targets are normalized, deduplicated and filtered by `exclude`. Hostnames are resolved, so
+   each IP is port-scanned once. Every open port is then reported per hostname behind that IP, so
+   HTTP probes and nuclei reach services routed by name (SNI, Host header). An IP that is only
+   reached through a hostname, like a shared CDN or Cloud Run frontend, is never probed by IP.
 3. Scanners run in config order, each building on the previous one: naabu finds open ports
    (TCP connect, no root), httpx adds HTTP status, title, technologies and versioned CPEs,
-   nuclei adds template findings, cve_lookup adds known CVEs per CPE from the [NVD API].
-4. The result is compared with the previous successful run, which produces events
+   nuclei adds template findings, cve_lookup adds known CVEs per CPE from the [NVD API], and
+   exploit_intel marks CVEs listed in [CISA KEV] and adds their [EPSS] score.
+4. Ports open last run but missing now get a direct TCP re-check. If they still accept
+   connections they are kept, with their previous findings, so one dropped packet does not cause
+   a "closed" alert followed by a "new" one.
+5. Drift guard: if a discovery module suddenly returns nothing, or open endpoints drop by more
+   than `max_endpoint_drop_pct` (default 50), the run fails instead of reporting mass closures.
+   That is usually expired credentials or network trouble. If the drop is real, store it once with
+   `docker compose run --rm scanner run-once --accept-drift`.
+6. The result is compared with the previous successful run, which produces events
    (`new_endpoint`, `closed_endpoint`, `new_finding`, `resolved_finding`, `new_asset`, `removed_asset`).
-5. Everything is stored in one transaction.
+7. Everything is stored in one transaction.
 
 Only one run executes at a time (Postgres advisory lock), so a manual `run-once` next to `serve`
 is safe: it is refused while a scan is running. A run killed mid-way (restart, crash) is marked
@@ -47,7 +59,8 @@ is safe: it is refused while a scan is running. A run killed mid-way (restart, c
 
 If any module fails, the whole run is marked `failed`, nothing is stored and no diff happens. A
 partial inventory would otherwise show up as falsely "closed" endpoints. The failure triggers the
-`scan-stale-or-failed` alert.
+`scan-stale-or-failed` alert. A run that takes longer than `RUN_TIMEOUT_HOURS` (default 6) is
+aborted and fails the same way.
 
 ## Where results live
 
@@ -59,8 +72,9 @@ Postgres database `exposure`. Raw per-run tables: `runs`, `assets`, `endpoints`,
 | `v_latest_run` | latest successful run |
 | `v_run_stats` | counts per run (assets, endpoints, findings by severity) |
 | `v_run_deltas` | per run: change vs previous run, `progress_pct` vs baseline |
-| `v_current_endpoints` / `v_current_findings` | latest state, joined with provider/account/resource |
+| `v_current_endpoints` / `v_current_findings` | latest state, joined with provider/account/resource, `first_seen` and `age_days`; findings also carry `exploited`, `epss`, `tags`, `accepted` |
 | `v_events` / `v_latest_events` | changes between runs |
+| `accepted` (table) | findings accepted by hand, see Triage |
 
 Baseline: the first successful run, or `BASELINE_RUN_ID` from `.env`.
 
@@ -75,10 +89,14 @@ docker compose exec postgres psql -U exposure -c 'SELECT * FROM v_run_deltas ORD
 | Scan report | every successful run: endpoint count, change vs last run, progress vs baseline, findings |
 | New public endpoints | a host:port that was not open in the previous run |
 | Closed public endpoints | a host:port that is no longer open |
-| New findings | a new medium/high/critical nuclei or CVE finding |
-| Scan failed or stale | the last run failed, or no success for 36 h |
+| Actively exploited vulnerabilities | a new finding whose CVE is in CISA KEV |
+| New findings | a new medium/high/critical nuclei or CVE finding (not exploited) |
+| New exposures | a new info/low finding tagged panel, exposure, misconfig, default-login or takeover |
+| Findings overdue | weekly: exploited, critical or high open > 30 days, medium > 90 days |
+| Scan failed or stale | the last run failed (including the drift guard), or no success for 36 h |
 
-The first run reports everything as new. Rules live in `grafana/provisioning/alerting/rules.yaml`.
+The first run reports everything as new. Accepted findings never alert. Rules live in
+`grafana/provisioning/alerting/rules.yaml`.
 
 ## Triage
 
@@ -86,13 +104,24 @@ The first run reports everything as new. Rules live in `grafana/provisioning/ale
   public? If not, close it with a firewall rule or ingress setting, or remove the public IP. The next
   run reports it as closed. If it is intentional, accept it, or add it to `exclude` if it must never
   be scanned.
-- **New finding**: open the dashboard's *Current findings* table. Each `template_id` links to its
-  details: the NVD entry for CVEs, the ProjectDiscovery template library for nuclei findings. For
-  CVE findings, check whether the detected
-  version (from the banner) is really what is running, since distros backport fixes. Patch or
-  restrict access. Fixed findings show up as `resolved_finding` on the next run.
+- **New finding**: open the dashboard's *Current findings* table. It is ordered by real-world
+  risk: actively exploited first, then severity, then EPSS (the probability of exploitation in the
+  next 30 days). Each `template_id` links to its details: the NVD entry for CVEs, the
+  ProjectDiscovery template library for nuclei findings. For CVE findings, check whether the
+  detected version (from the banner) is really what is running, since distros backport fixes.
+  Patch or restrict access. Fixed findings show up as `resolved_finding` on the next run.
+- **Exposure** (admin panel, leaked `.git` or `.env`, default login): these should almost never be
+  public. Restrict access first, then rotate anything the leaked file contained.
+- **Accept a finding** that is a false positive or a known risk. It stays on the dashboard (toggle
+  *Show accepted*) but stops alerting. Leave `until` empty to accept it forever:
+  ```sh
+  docker compose exec postgres psql -U exposure -c "INSERT INTO accepted VALUES
+    ('CVE-2021-23017', 'https://www.example.com', 'resolver not used', '2027-01-31')"
+  ```
 - **Scan failed**: `docker compose logs scanner`, or `SELECT id, error FROM runs ORDER BY id DESC LIMIT 5`.
   Common causes are expired credentials, API quota, or the NVD API being down (retried 3 times).
+  A drift guard error names the module or the drop. Fix the cause, or run once with
+  `--accept-drift` if the change is real.
 
 ## Configuration
 
@@ -103,16 +132,17 @@ for all options.
 | Discovery | |
 |---|---|
 | `cloudlist` | any [cloudlist] provider; the `providers` blocks are passed through unchanged |
-| `gcp_asset_search` | Cloud Asset Inventory search across the org for types cloudlist misses (default: Cloud SQL) |
+| `gcp_asset_search` | Cloud Asset Inventory search across the org for every public IP and Cloud Run / Functions / App Engine URL; `asset_types` to narrow |
 | `dns` | subfinder passive subdomain enumeration for `root_domains`; keeps names that resolve |
 | `static_list` | fixed `targets` |
 
 | Scanner | |
 |---|---|
-| `naabu` | port scan, `top_ports` + `extra_ports`, `rate` |
+| `naabu` | port scan, `top_ports` plus `extra_ports` (default: cloud service ports outside the top 1000), `rate` |
 | `httpx` | HTTP probe, tech detection |
-| `nuclei` | templates by `severities`, `rate_limit`, `concurrency`; templates auto-update into the `scanner-home` volume |
+| `nuclei` | templates by `severities`, `tags`, `exclude_tags` (default `dos`, `fuzz`, `intrusive`), `rate_limit`, `concurrency`; templates auto-update into the `scanner-home` volume. Use it twice: once for vulnerabilities, once for exposures at any severity (see `config.example.yaml`) |
 | `cve_lookup` | NVD CVEs for detected versions, `min_severity`, optional `api_key` (10× faster) |
+| `exploit_intel` | marks CVE findings in [CISA KEV] and adds [EPSS]; put it last |
 
 Rates default to conservative values so they don't trip Cloud Armor or production rate limits.
 
@@ -154,7 +184,8 @@ update `.env`, then `docker compose up -d scanner`.
 
 1. Create a test VM with a public IP and something listening on port 8080, allowed by firewall.
 2. `docker compose run --rm scanner run-once`. Expect a *New public endpoints* alert for `<ip>:8080`.
-3. Remove the firewall rule and run again. Expect *Closed public endpoints*.
+3. Remove the firewall rule and run again. Expect *Closed public endpoints*. If the test VM is
+   most of what you expose, the drift guard fails this run; repeat it with `run-once --accept-drift`.
 
 ## Operating notes
 
@@ -199,5 +230,7 @@ Suggested GitHub Actions steps:
 [httpx]: https://github.com/projectdiscovery/httpx
 [nuclei]: https://github.com/projectdiscovery/nuclei
 [NVD API]: https://nvd.nist.gov/developers/vulnerabilities
+[CISA KEV]: https://www.cisa.gov/known-exploited-vulnerabilities-catalog
+[EPSS]: https://www.first.org/epss/
 [golangci-lint]: https://golangci-lint.run/
 [gosec]: https://github.com/securego/gosec
