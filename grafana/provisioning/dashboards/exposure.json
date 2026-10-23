@@ -60,6 +60,30 @@
           ]
         },
         "allValue": "'__all'"
+      },
+      {
+        "name": "accepted",
+        "label": "Show accepted",
+        "type": "custom",
+        "query": "hide,show",
+        "current": {
+          "text": "hide",
+          "value": "hide"
+        },
+        "options": [
+          {
+            "text": "hide",
+            "value": "hide",
+            "selected": true
+          },
+          {
+            "text": "show",
+            "value": "show",
+            "selected": false
+          }
+        ],
+        "multi": false,
+        "includeAll": false
       }
     ]
   },
@@ -75,7 +99,7 @@
       "gridPos": {
         "x": 0,
         "y": 0,
-        "w": 4,
+        "w": 3,
         "h": 5
       },
       "targets": [
@@ -122,9 +146,9 @@
         "uid": "exposure-pg"
       },
       "gridPos": {
-        "x": 4,
+        "x": 3,
         "y": 0,
-        "w": 4,
+        "w": 3,
         "h": 5
       },
       "targets": [
@@ -188,9 +212,9 @@
         "uid": "exposure-pg"
       },
       "gridPos": {
-        "x": 8,
+        "x": 6,
         "y": 0,
-        "w": 5,
+        "w": 3,
         "h": 5
       },
       "targets": [
@@ -250,9 +274,9 @@
         "uid": "exposure-pg"
       },
       "gridPos": {
-        "x": 13,
+        "x": 9,
         "y": 0,
-        "w": 7,
+        "w": 4,
         "h": 5
       },
       "targets": [
@@ -304,6 +328,132 @@
       }
     },
     {
+      "id": 10,
+      "type": "stat",
+      "title": "Exploited (KEV)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "exposure-pg"
+      },
+      "gridPos": {
+        "x": 13,
+        "y": 0,
+        "w": 4,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "exposure-pg"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT count(*) AS \"Exploited\" FROM v_current_findings WHERE exploited AND NOT accepted"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds",
+            "fixedColor": "text"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "description": "Current findings listed in CISA's Known Exploited Vulnerabilities catalog. Fix these first."
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Overdue",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "exposure-pg"
+      },
+      "gridPos": {
+        "x": 17,
+        "y": 0,
+        "w": 4,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "exposure-pg"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT count(*) AS \"Overdue\" FROM v_current_findings WHERE NOT accepted AND ((exploited OR severity IN ('critical', 'high')) AND age_days > 30 OR severity = 'medium' AND age_days > 90)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds",
+            "fixedColor": "text"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "description": "Open findings past their deadline: exploited, critical and high after 30 days, medium after 90."
+    },
+    {
       "id": 5,
       "type": "stat",
       "title": "Last successful run",
@@ -312,9 +462,9 @@
         "uid": "exposure-pg"
       },
       "gridPos": {
-        "x": 20,
+        "x": 21,
         "y": 0,
-        "w": 4,
+        "w": 3,
         "h": 5
       },
       "targets": [
@@ -416,7 +566,7 @@
           "format": "table",
           "rawQuery": true,
           "editorMode": "code",
-          "rawSql": "SELECT host, port, provider, account, resource, url, http_status AS status, title, array_to_string(tech, ', ') AS tech\nFROM v_current_endpoints WHERE ('__all' IN (${provider:sqlstring}) OR coalesce(provider, '') IN (${provider:sqlstring})) AND ('__all' IN (${account:sqlstring}) OR coalesce(account, '') IN (${account:sqlstring})) ORDER BY host, port"
+          "rawSql": "SELECT host, port, provider, account, resource, url, http_status AS status, title, array_to_string(tech, ', ') AS tech, age_days AS age\nFROM v_current_endpoints WHERE ('__all' IN (${provider:sqlstring}) OR coalesce(provider, '') IN (${provider:sqlstring})) AND ('__all' IN (${account:sqlstring}) OR coalesce(account, '') IN (${account:sqlstring})) ORDER BY host, port"
         }
       ],
       "options": {
@@ -425,6 +575,27 @@
         "footer": {
           "show": false
         }
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "age"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "d"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          }
+        ]
       }
     },
     {
@@ -451,7 +622,7 @@
           "format": "table",
           "rawQuery": true,
           "editorMode": "code",
-          "rawSql": "SELECT severity, template_id, name, matched_at, account, resource, scanner,\n       CASE WHEN template_id LIKE 'CVE-%' THEN 'https://nvd.nist.gov/vuln/detail/' || template_id ELSE 'https://cloud.projectdiscovery.io/library/' || template_id END AS link\nFROM v_current_findings WHERE ('__all' IN (${provider:sqlstring}) OR coalesce(provider, '') IN (${provider:sqlstring})) AND ('__all' IN (${account:sqlstring}) OR coalesce(account, '') IN (${account:sqlstring}))\nORDER BY array_position(ARRAY['critical','high','medium','low','info'], severity), template_id"
+          "rawSql": "SELECT CASE WHEN exploited THEN 'exploited' ELSE '' END AS kev, severity, nullif(epss, 0) AS epss,\n       template_id, name, matched_at, age_days AS age, account, resource,\n       array_to_string(tags, ', ') AS tags, scanner, accepted_reason AS accepted,\n       CASE WHEN template_id ILIKE 'CVE-%' THEN 'https://nvd.nist.gov/vuln/detail/' ELSE 'https://cloud.projectdiscovery.io/library/' END || split_part(template_id, ':', 1) AS link\nFROM v_current_findings WHERE ('__all' IN (${provider:sqlstring}) OR coalesce(provider, '') IN (${provider:sqlstring})) AND ('__all' IN (${account:sqlstring}) OR coalesce(account, '') IN (${account:sqlstring}))\n  AND (NOT accepted OR '${accepted}' = 'show')\nORDER BY exploited DESC, array_position(ARRAY['critical','high','medium','low','info'], severity), epss DESC NULLS LAST, template_id"
         }
       ],
       "options": {
@@ -501,7 +672,7 @@
               },
               {
                 "id": "custom.minWidth",
-                "value": 500
+                "value": 400
               }
             ]
           },
@@ -536,9 +707,88 @@
                 "value": 90
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "kev"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "exploited": {
+                        "color": "red",
+                        "index": 0
+                      }
+                    }
+                  },
+                  {
+                    "type": "special",
+                    "options": {
+                      "match": "empty",
+                      "result": {
+                        "color": "transparent",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "epss"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "age"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "d"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
           }
         ]
-      }
+      },
+      "description": "Ordered by real-world risk: actively exploited (CISA KEV) first, then severity, then EPSS (probability of exploitation in the next 30 days). Accepted findings are hidden unless 'Show accepted' is on."
     },
     {
       "id": 9,
@@ -564,7 +814,7 @@
           "format": "table",
           "rawQuery": true,
           "editorMode": "code",
-          "rawSql": "SELECT finished_at AS time, type, target, port, severity, detail->>'template_id' AS finding,\n       provider, account, resource,\n       CASE WHEN detail->>'template_id' LIKE 'CVE-%' THEN 'https://nvd.nist.gov/vuln/detail/' || (detail->>'template_id')\n            WHEN detail->>'template_id' IS NOT NULL THEN 'https://cloud.projectdiscovery.io/library/' || (detail->>'template_id') END AS link\nFROM v_events WHERE $__timeFilter(finished_at) AND ('__all' IN (${provider:sqlstring}) OR coalesce(provider, '') IN (${provider:sqlstring})) AND ('__all' IN (${account:sqlstring}) OR coalesce(account, '') IN (${account:sqlstring})) ORDER BY finished_at DESC, type"
+          "rawSql": "SELECT finished_at AS time, type, target, port, severity, detail->>'template_id' AS finding,\n       provider, account, resource,\n       CASE WHEN detail->>'template_id' ILIKE 'CVE-%' THEN 'https://nvd.nist.gov/vuln/detail/'\n            WHEN detail->>'template_id' IS NOT NULL THEN 'https://cloud.projectdiscovery.io/library/' END || split_part(detail->>'template_id', ':', 1) AS link\nFROM v_events WHERE $__timeFilter(finished_at) AND ('__all' IN (${provider:sqlstring}) OR coalesce(provider, '') IN (${provider:sqlstring})) AND ('__all' IN (${account:sqlstring}) OR coalesce(account, '') IN (${account:sqlstring})) ORDER BY finished_at DESC, type"
         }
       ],
       "options": {
