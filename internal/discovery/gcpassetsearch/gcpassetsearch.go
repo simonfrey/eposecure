@@ -1,5 +1,7 @@
-// Package gcpassetsearch fills gaps in cloudlist's GCP coverage (e.g. Cloud SQL)
-// with a Cloud Asset Inventory search across the whole organization.
+// Package gcpassetsearch finds every public IP and service URL in a GCP
+// organization with a Cloud Asset Inventory search. It overlaps with
+// cloudlist on purpose: targets are deduplicated, and anything cloudlist
+// does not cover (Cloud SQL, forwarding rules, reserved addresses) is caught.
 package gcpassetsearch
 
 import (
@@ -7,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"net/url"
+	"slices"
 	"strings"
 
 	asset "cloud.google.com/go/asset/apiv1"
@@ -27,7 +31,7 @@ type AssetSearch struct {
 }
 
 func New(o config.Options) (*AssetSearch, error) {
-	s := &AssetSearch{AssetTypes: []string{"sqladmin.googleapis.com/Instance"}}
+	s := &AssetSearch{AssetTypes: defaultTypes}
 	if err := o.Decode(s); err != nil {
 		return nil, err
 	}
@@ -35,6 +39,20 @@ func New(o config.Options) (*AssetSearch, error) {
 		return nil, fmt.Errorf("gcp_asset_search: organization_id and service_account_key are required")
 	}
 	return s, nil
+}
+
+// defaultTypes are the resource types that can hold a public address or URL.
+// VM instances are left to cloudlist: their metadata can contain unrelated URLs.
+var defaultTypes = []string{
+	"compute.googleapis.com/Address",
+	"compute.googleapis.com/GlobalAddress",
+	"compute.googleapis.com/ForwardingRule",
+	"compute.googleapis.com/GlobalForwardingRule",
+	"container.googleapis.com/Cluster",
+	"sqladmin.googleapis.com/Instance",
+	"run.googleapis.com/Service",
+	"cloudfunctions.googleapis.com/Function",
+	"appengine.googleapis.com/Application",
 }
 
 func (s *AssetSearch) Name() string { return "gcp_asset_search" }
@@ -60,40 +78,54 @@ func (s *AssetSearch) Discover(ctx context.Context) ([]model.Asset, error) {
 		if err != nil {
 			return nil, err
 		}
-		ips := map[string]bool{}
-		collectPublicIPs(structpb.NewStructValue(r.GetAdditionalAttributes()), ips)
+		targets := map[string]bool{}
+		collectTargets(structpb.NewStructValue(r.GetAdditionalAttributes()), targets)
 		for _, v := range r.GetVersionedResources() {
-			collectPublicIPs(structpb.NewStructValue(v.GetResource()), ips)
+			collectTargets(structpb.NewStructValue(v.GetResource()), targets)
 		}
-		for ip := range ips {
+		for t := range targets {
 			assets = append(assets, model.Asset{
 				Provider: "gcp",
 				Account:  strings.TrimPrefix(r.GetProject(), "projects/"),
 				Kind:     r.GetAssetType(),
 				Name:     r.GetName(),
-				Target:   ip,
+				Target:   t,
 			})
 		}
 	}
 }
 
-// collectPublicIPs walks any resource JSON and keeps every string that is a
-// public IP. This works for every asset type without per-type schemas.
-func collectPublicIPs(v *structpb.Value, out map[string]bool) {
+// collectTargets walks any resource JSON and keeps every public IP and the
+// host of every URL on a Google serving domain (Cloud Run, Functions, App
+// Engine, Firebase). Other URLs are never targets: they may belong to third
+// parties. This works for every asset type without per-type schemas.
+func collectTargets(v *structpb.Value, out map[string]bool) {
 	switch k := v.GetKind().(type) {
 	case *structpb.Value_StringValue:
-		if ip, err := netip.ParseAddr(k.StringValue); err == nil && isPublic(ip) {
+		s := k.StringValue
+		if ip, err := netip.ParseAddr(s); err == nil && isPublic(ip) {
 			out[ip.String()] = true
+		}
+		if u, err := url.Parse(s); err == nil && u.Scheme == "https" && googleHosted(u.Hostname()) {
+			out[strings.ToLower(u.Hostname())] = true
 		}
 	case *structpb.Value_StructValue:
 		for _, f := range k.StructValue.GetFields() {
-			collectPublicIPs(f, out)
+			collectTargets(f, out)
 		}
 	case *structpb.Value_ListValue:
 		for _, e := range k.ListValue.GetValues() {
-			collectPublicIPs(e, out)
+			collectTargets(e, out)
 		}
 	}
+}
+
+// servingDomains host customer services, so their names are the org's endpoints.
+var servingDomains = []string{".run.app", ".cloudfunctions.net", ".appspot.com", ".web.app", ".firebaseapp.com"}
+
+func googleHosted(host string) bool {
+	host = strings.ToLower(host)
+	return slices.ContainsFunc(servingDomains, func(d string) bool { return strings.HasSuffix(host, d) })
 }
 
 func isPublic(ip netip.Addr) bool {
