@@ -15,6 +15,9 @@ type Config struct {
 	Discovery []Module `yaml:"discovery"`
 	Scanners  []Module `yaml:"scanners"`
 	Exclude   []string `yaml:"exclude"` // IPs, CIDRs or hostnames never to scan
+	// A run whose endpoint count drops by more than this percentage fails
+	// instead of reporting everything as closed. 0 disables the guard.
+	MaxEndpointDropPct int `yaml:"max_endpoint_drop_pct"`
 }
 
 // Module is one entry of the discovery or scanners list.
@@ -66,7 +69,7 @@ func Parse(b []byte) (*Config, error) {
 	if err := expand(&root); err != nil {
 		return nil, err
 	}
-	var c Config
+	c := Config{MaxEndpointDropPct: 50}
 	if err := root.Decode(&c); err != nil {
 		return nil, err
 	}

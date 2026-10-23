@@ -60,3 +60,14 @@ func TestParseErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestMaxEndpointDropPct(t *testing.T) {
+	c, err := Parse([]byte("discovery: []"))
+	if err != nil || c.MaxEndpointDropPct != 50 {
+		t.Fatalf("default: %v %v", c, err)
+	}
+	c, err = Parse([]byte("max_endpoint_drop_pct: 0"))
+	if err != nil || c.MaxEndpointDropPct != 0 {
+		t.Fatalf("explicit 0 must disable: %v %v", c, err)
+	}
+}

@@ -6,9 +6,11 @@ import (
 	"net"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/simonfrey/exposure-scanner/internal/model"
+	"github.com/simonfrey/exposure-scanner/internal/registry"
 )
 
 func TestTargets(t *testing.T) {
@@ -96,5 +98,39 @@ func TestAddrOf(t *testing.T) {
 		if got := addrOf(in); got != want {
 			t.Errorf("addrOf(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+type named string
+
+func (n named) Name() string                                    { return string(n) }
+func (n named) Discover(context.Context) ([]model.Asset, error) { return nil, nil }
+
+func TestCheckDrift(t *testing.T) {
+	p := &Pipeline{discoverers: []registry.Discoverer{named("dns"), named("cloudlist")}, maxDropPct: 50}
+	eps := func(n int) []model.Endpoint { return make([]model.Endpoint, n) }
+	assets := func(sources ...string) (out []model.Asset) {
+		for _, s := range sources {
+			out = append(out, model.Asset{Source: s})
+		}
+		return out
+	}
+	prev := model.Snapshot{Assets: assets("dns", "cloudlist"), Endpoints: eps(10)}
+
+	for name, tc := range map[string]struct {
+		cur     model.Snapshot
+		wantErr string
+	}{
+		"ok":               {model.Snapshot{Assets: assets("dns", "cloudlist"), Endpoints: eps(5)}, ""},
+		"source empty":     {model.Snapshot{Assets: assets("cloudlist"), Endpoints: eps(10)}, "discovery dns returned 0 assets"},
+		"endpoints halved": {model.Snapshot{Assets: assets("dns", "cloudlist"), Endpoints: eps(4)}, "endpoints dropped from 10 to 4"},
+	} {
+		err := p.checkDrift(prev, tc.cur)
+		if (err == nil) != (tc.wantErr == "") || (err != nil && !strings.Contains(err.Error(), tc.wantErr)) {
+			t.Errorf("%s: err = %v, want %q", name, err, tc.wantErr)
+		}
+	}
+	if err := p.checkDrift(model.Snapshot{}, model.Snapshot{}); err != nil {
+		t.Errorf("first run: %v", err)
 	}
 }

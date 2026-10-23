@@ -1,7 +1,10 @@
 // Command scanner discovers public endpoints and scans them.
 //
-//	scanner run-once   one run, then exit
-//	scanner serve      run now and then every SCAN_INTERVAL_HOURS
+//	scanner run-once [--accept-drift]   one run, then exit
+//	scanner serve                       run now and then every SCAN_INTERVAL_HOURS
+//
+// --accept-drift stores a run even if endpoints dropped sharply or a
+// discovery source returned nothing (see max_endpoint_drop_pct).
 package main
 
 import (
@@ -11,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,21 +27,22 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 2 || (os.Args[1] != "run-once" && os.Args[1] != "serve") {
-		fmt.Fprintln(os.Stderr, "usage: scanner run-once|serve")
+	args := strings.Join(os.Args[1:], " ")
+	if args != "run-once" && args != "run-once --accept-drift" && args != "serve" {
+		fmt.Fprintln(os.Stderr, "usage: scanner run-once [--accept-drift] | serve")
 		os.Exit(2)
 	}
 	gologger.DefaultLogger.SetMaxLevel(levels.LevelWarning) // quiet the ProjectDiscovery libraries
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, os.Args[1]); err != nil {
+	if err := run(ctx, os.Args[1], pipeline.RunOptions{AcceptDrift: strings.HasSuffix(args, "--accept-drift")}); err != nil {
 		slog.Error("exiting", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, cmd string) error {
+func run(ctx context.Context, cmd string, opts pipeline.RunOptions) error {
 	cfg, err := config.Load(env("CONFIG_PATH", "/config/config.yaml"))
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
@@ -56,7 +61,7 @@ func run(ctx context.Context, cmd string) error {
 	}
 
 	if cmd == "run-once" {
-		return p.Run(ctx)
+		return p.Run(ctx, opts)
 	}
 
 	hours, err := strconv.Atoi(env("SCAN_INTERVAL_HOURS", "24"))
@@ -66,7 +71,7 @@ func run(ctx context.Context, cmd string) error {
 	interval := time.Duration(hours) * time.Hour
 	for {
 		next := time.Now().Add(interval)
-		if err := p.Run(ctx); err != nil {
+		if err := p.Run(ctx, opts); err != nil {
 			slog.Error("run failed, retrying at next interval", "err", err) // recorded in runs table, Grafana alerts
 		}
 		slog.Info("sleeping", "next_run", next.Format(time.RFC3339))
