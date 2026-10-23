@@ -17,12 +17,19 @@ import (
 
 type Nuclei struct {
 	Severities  []string `yaml:"severities"`
-	RateLimit   int      `yaml:"rate_limit"` // requests per second across all hosts
+	Tags        []string `yaml:"tags"`         // only templates with one of these tags; empty = all
+	ExcludeTags []string `yaml:"exclude_tags"` // never run, e.g. dos
+	RateLimit   int      `yaml:"rate_limit"`   // requests per second across all hosts
 	Concurrency int      `yaml:"concurrency"`
 }
 
 func New(o config.Options) (*Nuclei, error) {
-	n := &Nuclei{Severities: []string{"medium", "high", "critical"}, RateLimit: 50, Concurrency: 10}
+	n := &Nuclei{
+		Severities:  []string{"medium", "high", "critical"},
+		ExcludeTags: []string{"dos", "fuzz", "intrusive"},
+		RateLimit:   50,
+		Concurrency: 10,
+	}
 	return n, o.Decode(n)
 }
 
@@ -43,7 +50,11 @@ func (n *Nuclei) Scan(ctx context.Context, sc *model.ScanContext) error {
 
 	c := n.Concurrency
 	ne, err := nuclei.NewNucleiEngineCtx(ctx,
-		nuclei.WithTemplateFilters(nuclei.TemplateFilters{Severity: strings.Join(n.Severities, ",")}),
+		nuclei.WithTemplateFilters(nuclei.TemplateFilters{
+			Severity:    strings.Join(n.Severities, ","),
+			Tags:        n.Tags,
+			ExcludeTags: n.ExcludeTags,
+		}),
 		nuclei.WithGlobalRateLimitCtx(ctx, n.RateLimit, time.Second),
 		nuclei.WithConcurrency(nuclei.Concurrency{
 			TemplateConcurrency: c, HostConcurrency: c,
@@ -77,6 +88,7 @@ func (n *Nuclei) Scan(ctx context.Context, sc *model.ScanContext) error {
 			MatchedAt:  matched,
 			Target:     ev.Host,
 			Scanner:    n.Name(),
+			Tags:       ev.Info.Tags.ToSlice(),
 			Raw:        ev,
 		})
 	})

@@ -40,7 +40,8 @@ type Finding struct {
 	MatchedAt  string
 	Target     string
 	Scanner    string
-	Raw        any // stored as jsonb
+	Tags       []string // nuclei template tags
+	Raw        any      // stored as jsonb
 }
 
 // ScanContext is passed through the scanners in order. Each scanner reads
