@@ -1,0 +1,6 @@
+.env
+config.yaml
+/scanner
+*.json.key
+.terraform/
+*.tfstate*
