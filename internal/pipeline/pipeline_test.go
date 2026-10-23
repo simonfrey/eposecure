@@ -134,3 +134,15 @@ func TestCheckDrift(t *testing.T) {
 		t.Errorf("first run: %v", err)
 	}
 }
+
+func TestUnique(t *testing.T) {
+	got := unique([]model.Finding{
+		{TemplateID: "git-config", MatchedAt: "http://a/.git/config", Scanner: "nuclei"},
+		{TemplateID: "CVE-1", MatchedAt: "http://a"},
+		{TemplateID: "git-config", MatchedAt: "http://a/.git/config", Scanner: "second pass"},
+		{TemplateID: "git-config", MatchedAt: "http://b/.git/config"},
+	})
+	if len(got) != 3 || got[0].Scanner != "nuclei" {
+		t.Fatalf("got %+v", got)
+	}
+}

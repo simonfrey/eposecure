@@ -130,8 +130,20 @@ func (p *Pipeline) scan(ctx context.Context, log *slog.Logger) (model.Snapshot, 
 		}
 		log.Info("scanned", "module", s.Name(), "endpoints", len(sc.Endpoints), "findings", len(sc.Findings))
 	}
-	snap.Endpoints, snap.Findings = sc.Endpoints, sc.Findings
+	snap.Endpoints, snap.Findings = sc.Endpoints, unique(sc.Findings)
 	return snap, sc.Names, nil
+}
+
+// unique drops repeated findings (same id at the same place), which happens
+// when scanners overlap, e.g. two nuclei passes that both include medium.
+func unique(findings []model.Finding) []model.Finding {
+	seen := map[string]bool{}
+	return slices.DeleteFunc(findings, func(f model.Finding) bool {
+		k := f.TemplateID + "|" + f.MatchedAt
+		dup := seen[k]
+		seen[k] = true
+		return dup
+	})
 }
 
 // checkDrift refuses results that look like a broken scan rather than a
