@@ -59,19 +59,28 @@ func run(ctx context.Context, cmd string, opts pipeline.RunOptions) error {
 	if err != nil {
 		return err
 	}
+	interval, err := hours("SCAN_INTERVAL_HOURS", "24")
+	if err != nil {
+		return err
+	}
+	timeout, err := hours("RUN_TIMEOUT_HOURS", "6")
+	if err != nil {
+		return err
+	}
+	// A hung module must not block all future runs; the timed-out run is
+	// recorded as failed and alerts.
+	runOnce := func() error {
+		rctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return p.Run(rctx, opts)
+	}
 
 	if cmd == "run-once" {
-		return p.Run(ctx, opts)
+		return runOnce()
 	}
-
-	hours, err := strconv.Atoi(env("SCAN_INTERVAL_HOURS", "24"))
-	if err != nil || hours < 1 {
-		return fmt.Errorf("SCAN_INTERVAL_HOURS must be a positive integer")
-	}
-	interval := time.Duration(hours) * time.Hour
 	for {
 		next := time.Now().Add(interval)
-		if err := p.Run(ctx, opts); err != nil {
+		if err := runOnce(); err != nil {
 			slog.Error("run failed, retrying at next interval", "err", err) // recorded in runs table, Grafana alerts
 		}
 		slog.Info("sleeping", "next_run", next.Format(time.RFC3339))
@@ -81,6 +90,14 @@ func run(ctx context.Context, cmd string, opts pipeline.RunOptions) error {
 		case <-time.After(time.Until(next)):
 		}
 	}
+}
+
+func hours(key, def string) (time.Duration, error) {
+	h, err := strconv.Atoi(env(key, def))
+	if err != nil || h < 1 {
+		return 0, fmt.Errorf("%s must be a positive integer", key)
+	}
+	return time.Duration(h) * time.Hour, nil
 }
 
 func env(key, def string) string {
