@@ -125,7 +125,9 @@ type nvdResponse struct {
 
 func (c *CVELookup) lookup(ctx context.Context, cpe string) ([]cve, error) {
 	q := url.Values{"cpeName": {cpe}, "resultsPerPage": {"2000"}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"?"+q.Encode(), nil)
+	// isVulnerable drops CVEs where the CPE is only part of the environment
+	// ("running on"); noRejected drops rejected CVEs. Both are valueless flags.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"?"+q.Encode()+"&isVulnerable&noRejected", nil)
 	if err != nil {
 		return nil, err
 	}

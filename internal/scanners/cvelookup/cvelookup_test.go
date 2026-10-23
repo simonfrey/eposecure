@@ -26,6 +26,9 @@ func TestScan(t *testing.T) {
 		if got := r.URL.Query().Get("cpeName"); got != "cpe:2.3:a:f5:nginx:1.18.0:*:*:*:*:*:*:*" {
 			t.Errorf("cpeName = %q", got)
 		}
+		if q := r.URL.Query(); !q.Has("isVulnerable") || !q.Has("noRejected") {
+			t.Errorf("precision flags missing: %s", r.URL.RawQuery)
+		}
 		if r.Header.Get("apiKey") != "k" {
 			t.Error("api key header missing")
 		}
