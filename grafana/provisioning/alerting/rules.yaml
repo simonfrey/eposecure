@@ -20,7 +20,7 @@ groups:
           summary: >-
             Run {{ $labels.run_id }}: {{ $labels.endpoints }} public endpoints, {{ $labels.change }}.
             {{ $labels.progress }}.
-            Findings: {{ $labels.critical }} critical, {{ $labels.high }} high, {{ $labels.medium }} medium.
+            Findings: {{ $labels.exploited }} actively exploited, {{ $labels.critical }} critical, {{ $labels.high }} high, {{ $labels.medium }} medium.
         data:
           - refId: A
             relativeTimeRange: { from: 600, to: 0 }
@@ -45,6 +45,7 @@ groups:
                          WHEN progress_pct >= 0 THEN progress_pct || '% fewer endpoints than baseline (' || baseline_endpoints || ')'
                          ELSE abs(progress_pct) || '% more endpoints than baseline (' || baseline_endpoints || ')'
                        END AS progress,
+                       exploited::text AS exploited,
                        critical::text AS critical, high::text AS high, medium::text AS medium,
                        1 AS value
                 FROM v_run_deltas
@@ -136,7 +137,104 @@ groups:
                 FROM v_latest_events
                 WHERE type = 'new_finding'
                   AND severity IN ('medium', 'high', 'critical')
+                  AND detail->>'exploited' IS DISTINCT FROM 'true' -- see exploited-vulnerabilities
+                  AND NOT accepted
                   AND finished_at > now() - interval '20 minutes'
+          - *threshold
+
+      - uid: exploited-vulnerabilities
+        title: Actively exploited vulnerabilities
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: critical }
+        annotations:
+          title: ':rotating_light: Actively exploited vulnerability exposed'
+          summary: '{{ $labels.template_id }} at {{ $labels.matched_at }}{{ with $labels.account }} ({{ . }}){{ end }}, EPSS {{ $labels.epss }}: {{ $labels.name }}'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: exposure-pg
+            model:
+              refId: A
+              format: table
+              rawQuery: true
+              editorMode: code
+              rawSql: |
+                SELECT target, account,
+                       detail->>'template_id' AS template_id,
+                       detail->>'matched_at' AS matched_at,
+                       round(100 * (detail->>'epss')::numeric, 1) || '%' AS epss,
+                       left(detail->>'name', 200) AS name,
+                       1 AS value
+                FROM v_latest_events
+                WHERE type = 'new_finding'
+                  AND detail->>'exploited' = 'true'
+                  AND NOT accepted
+                  AND finished_at > now() - interval '20 minutes'
+          - *threshold
+
+      - uid: exposures
+        title: New exposures
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning }
+        annotations:
+          title: New exposures (panels, leaked files, default logins)
+          summary: '{{ $labels.template_id }} at {{ $labels.matched_at }}{{ with $labels.account }} ({{ . }}){{ end }}: {{ $labels.name }}'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: exposure-pg
+            model:
+              refId: A
+              format: table
+              rawQuery: true
+              editorMode: code
+              rawSql: |
+                -- medium and above already go through new-findings
+                SELECT target, account,
+                       detail->>'template_id' AS template_id,
+                       detail->>'matched_at' AS matched_at,
+                       left(detail->>'name', 200) AS name,
+                       1 AS value
+                FROM v_latest_events
+                WHERE type = 'new_finding'
+                  AND severity IN ('info', 'low')
+                  AND detail->'tags' ?| array['panel', 'exposure', 'misconfig', 'default-login', 'takeover']
+                  AND NOT accepted
+                  AND finished_at > now() - interval '20 minutes'
+          - *threshold
+
+      - uid: findings-overdue
+        title: Findings overdue
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning }
+        annotations:
+          title: Findings open too long (exploited/critical/high > 30 days, medium > 90)
+          summary: '[{{ $labels.severity }}] {{ $labels.template_id }} at {{ $labels.matched_at }}{{ with $labels.account }} ({{ . }}){{ end }}, open {{ $labels.age_days }} days'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: exposure-pg
+            model:
+              refId: A
+              format: table
+              rawQuery: true
+              editorMode: code
+              rawSql: |
+                SELECT CASE WHEN exploited THEN 'exploited' ELSE severity END AS severity,
+                       template_id, matched_at, account, age_days::text AS age_days, 1 AS value
+                FROM v_current_findings
+                WHERE NOT accepted
+                  AND ((exploited OR severity IN ('critical', 'high')) AND age_days > 30
+                       OR severity = 'medium' AND age_days > 90)
           - *threshold
 
       - uid: scan-stale-or-failed

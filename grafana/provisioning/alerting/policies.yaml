@@ -6,3 +6,8 @@ policies:
     group_wait: 30s
     group_interval: 5m
     repeat_interval: 24h
+    routes:
+      # A weekly reminder is enough for findings that stay open.
+      - receiver: slack-exposure
+        object_matchers: [[alertname, '=', Findings overdue]]
+        repeat_interval: 7d
