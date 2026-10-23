@@ -49,7 +49,12 @@ type Finding struct {
 // ScanContext is passed through the scanners in order. Each scanner reads
 // what earlier ones produced and adds its own results.
 type ScanContext struct {
-	Targets   []string
+	Targets []string // IPs to port-scan
+	// Names maps each IP to the inventory targets behind it: hostnames that
+	// resolve to it, and the IP itself if it was discovered as such. Open
+	// ports are reported per name, never for an IP that is not inventory
+	// (e.g. a CDN or Cloud Run frontend shared with other customers).
+	Names     map[string][]string
 	Endpoints []Endpoint
 	Findings  []Finding
 }

@@ -1,4 +1,7 @@
 // Package naabu finds open ports on all targets with a TCP connect scan (no root needed).
+// Each open port is reported once per inventory name behind the IP
+// (model.ScanContext.Names), so later HTTP probes reach name-based (SNI /
+// Host header) services.
 package naabu
 
 import (
@@ -33,6 +36,7 @@ func (n *Naabu) Scan(ctx context.Context, sc *model.ScanContext) error {
 		return nil
 	}
 	var mu sync.Mutex
+	seen := map[string]bool{} // a name with several IPs is reported once per port
 	r, err := runner.NewRunner(&runner.Options{
 		Host:               goflags.StringSlice(sc.Targets),
 		ScanType:           runner.ConnectScan,
@@ -51,11 +55,13 @@ func (n *Naabu) Scan(ctx context.Context, sc *model.ScanContext) error {
 			mu.Lock()
 			defer mu.Unlock()
 			for _, p := range hr.Ports {
-				host := hr.Host
-				if host == "" {
-					host = hr.IP
+				for _, h := range sc.Names[hr.IP] {
+					e := model.Endpoint{Host: h, IP: hr.IP, Port: p.Port, Scanner: n.Name()}
+					if !seen[e.Addr()] {
+						seen[e.Addr()] = true
+						sc.Endpoints = append(sc.Endpoints, e)
+					}
 				}
-				sc.Endpoints = append(sc.Endpoints, model.Endpoint{Host: host, IP: hr.IP, Port: p.Port, Scanner: n.Name()})
 			}
 		},
 	})

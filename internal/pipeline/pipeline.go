@@ -95,8 +95,9 @@ func (p *Pipeline) scan(ctx context.Context, log *slog.Logger) (model.Snapshot, 
 	}
 	snap.Assets = slices.Concat(results...)
 
-	sc := &model.ScanContext{Targets: targets(snap.Assets, p.exclude)}
-	log.Info("scanning", "targets", len(sc.Targets))
+	sc := &model.ScanContext{}
+	sc.Targets, sc.Names = resolve(ctx, log, targets(snap.Assets, p.exclude), p.exclude)
+	log.Info("scanning", "ips", len(sc.Targets))
 	for _, s := range p.scanners {
 		if err := s.Scan(ctx, sc); err != nil {
 			return snap, fmt.Errorf("scanner %s: %w", s.Name(), err)

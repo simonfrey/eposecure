@@ -1,6 +1,8 @@
 package pipeline
 
 import (
+	"context"
+	"log/slog"
 	"slices"
 	"testing"
 
@@ -31,5 +33,15 @@ func TestNormalize(t *testing.T) {
 		if got := normalize(in); got != want {
 			t.Errorf("normalize(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestResolveScansEachIPOnce(t *testing.T) {
+	ips, names := resolve(context.Background(), slog.Default(), []string{"127.0.0.1", "localhost"}, []string{"::1/128"})
+	if !slices.Equal(ips, []string{"127.0.0.1"}) {
+		t.Fatalf("ips = %v (::1 is excluded)", ips)
+	}
+	if got := names["127.0.0.1"]; !slices.Equal(got, []string{"127.0.0.1", "localhost"}) {
+		t.Fatalf("names = %v", got)
 	}
 }
