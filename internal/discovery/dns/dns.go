@@ -74,7 +74,7 @@ func (d *DNS) Discover(ctx context.Context) ([]model.Asset, error) {
 				Provider: "dns",
 				Account:  root,
 				Kind:     "hostname",
-				Name:     strings.Join(append(data.A, data.AAAA...), ","),
+				Name:     h,
 				Target:   h,
 			})
 		}
