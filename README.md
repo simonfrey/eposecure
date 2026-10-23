@@ -1,0 +1,203 @@
+# exposure-scanner
+
+Finds everything you expose to the internet and scans it from the outside, like an attacker would.
+Discovery covers cloud inventories (GCP, AWS, Azure, … via [cloudlist]) and DNS. Scanning uses
+ProjectDiscovery's [naabu], [httpx] and [nuclei] as Go libraries, plus a CVE lookup for detected
+software versions. Results go to Postgres. Grafana shows the dashboard and sends Slack alerts.
+
+```
+cloudlist (gcp, aws, …) ─┐
+gcp_asset_search        ─┼─→ assets → targets ─→ naabu → httpx → nuclei → cve_lookup
+dns (subfinder + dnsx)  ─┤                                   │
+static_list             ─┘                                   ▼
+                                       Postgres (runs, assets, endpoints, findings, events + views)
+                                                             │
+                                       Grafana: dashboard (login) + alert rules → Slack
+```
+
+Run it **outside** your cloud: firewall rules often allow the provider's own ranges (health
+checks, IAP), so a scan from inside shows more than the internet sees.
+
+## Quick start
+
+```sh
+cp .env.example .env                # set passwords, Slack webhook, cloud credentials
+cp config.example.yaml config.yaml  # pick discovery modules and scanners
+docker compose up -d
+```
+
+Grafana is at http://localhost:3000 (user `admin`, password `GF_SECURITY_ADMIN_PASSWORD`). The
+scanner starts a run immediately, then repeats every `SCAN_INTERVAL_HOURS` (default 24).
+To trigger a run by hand: `docker compose run --rm scanner run-once`.
+
+## How a run works
+
+1. All discovery modules run in parallel and return assets (provider, account, kind, name, target).
+2. Targets are normalized, deduplicated and filtered by `exclude`.
+3. Scanners run in config order, each building on the previous one: naabu finds open ports
+   (TCP connect, no root), httpx adds HTTP status, title, technologies and versioned CPEs,
+   nuclei adds template findings, cve_lookup adds known CVEs per CPE from the [NVD API].
+4. The result is compared with the previous successful run, which produces events
+   (`new_endpoint`, `closed_endpoint`, `new_finding`, `resolved_finding`, `new_asset`, `removed_asset`).
+5. Everything is stored in one transaction.
+
+Only one run executes at a time (Postgres advisory lock), so a manual `run-once` next to `serve`
+is safe: it is refused while a scan is running. A run killed mid-way (restart, crash) is marked
+`failed` with error `interrupted` when the next run starts.
+
+If any module fails, the whole run is marked `failed`, nothing is stored and no diff happens. A
+partial inventory would otherwise show up as falsely "closed" endpoints. The failure triggers the
+`scan-stale-or-failed` alert.
+
+## Where results live
+
+Postgres database `exposure`. Raw per-run tables: `runs`, `assets`, `endpoints`, `findings`,
+`events`. The views are the stable interface for Grafana or anything else:
+
+| View | Content |
+|---|---|
+| `v_latest_run` | latest successful run |
+| `v_run_stats` | counts per run (assets, endpoints, findings by severity) |
+| `v_run_deltas` | per run: change vs previous run, `progress_pct` vs baseline |
+| `v_current_endpoints` / `v_current_findings` | latest state, joined with provider/account/resource |
+| `v_events` / `v_latest_events` | changes between runs |
+
+Baseline: the first successful run, or `BASELINE_RUN_ID` from `.env`.
+
+```sh
+docker compose exec postgres psql -U exposure -c 'SELECT * FROM v_run_deltas ORDER BY run_id DESC LIMIT 5'
+```
+
+## Alerts (Slack, via Grafana)
+
+| Rule | When |
+|---|---|
+| Scan report | every successful run: endpoint count, change vs last run, progress vs baseline, findings |
+| New public endpoints | a host:port that was not open in the previous run |
+| Closed public endpoints | a host:port that is no longer open |
+| New findings | a new medium/high/critical nuclei or CVE finding |
+| Scan failed or stale | the last run failed, or no success for 36 h |
+
+The first run reports everything as new. Rules live in `grafana/provisioning/alerting/rules.yaml`.
+
+## Triage
+
+- **New endpoint**: find the owner from `account` and `resource` in the alert. Is it supposed to be
+  public? If not, close it with a firewall rule or ingress setting, or remove the public IP. The next
+  run reports it as closed. If it is intentional, accept it, or add it to `exclude` if it must never
+  be scanned.
+- **New finding**: open the dashboard's *Current findings* table. Each `template_id` links to its
+  details: the NVD entry for CVEs, the ProjectDiscovery template library for nuclei findings. For
+  CVE findings, check whether the detected
+  version (from the banner) is really what is running, since distros backport fixes. Patch or
+  restrict access. Fixed findings show up as `resolved_finding` on the next run.
+- **Scan failed**: `docker compose logs scanner`, or `SELECT id, error FROM runs ORDER BY id DESC LIMIT 5`.
+  Common causes are expired credentials, API quota, or the NVD API being down (retried 3 times).
+
+## Configuration
+
+`config.yaml` lists modules in order. Each entry has `use: <module>` plus that module's own
+options. `${VAR}` is replaced with environment variables from `.env`. See `config.example.yaml`
+for all options.
+
+| Discovery | |
+|---|---|
+| `cloudlist` | any [cloudlist] provider; the `providers` blocks are passed through unchanged |
+| `gcp_asset_search` | Cloud Asset Inventory search across the org for types cloudlist misses (default: Cloud SQL) |
+| `dns` | subfinder passive subdomain enumeration for `root_domains`; keeps names that resolve |
+| `static_list` | fixed `targets` |
+
+| Scanner | |
+|---|---|
+| `naabu` | port scan, `top_ports` + `extra_ports`, `rate` |
+| `httpx` | HTTP probe, tech detection |
+| `nuclei` | templates by `severities`, `rate_limit`, `concurrency`; templates auto-update into the `scanner-home` volume |
+| `cve_lookup` | NVD CVEs for detected versions, `min_severity`, optional `api_key` (10× faster) |
+
+Rates default to conservative values so they don't trip Cloud Armor or production rate limits.
+
+### Adding a cloud provider
+
+Add a block under `cloudlist.providers` and its credentials to `.env`. No code changes:
+
+```yaml
+- provider: aws
+  id: aws-prod
+  aws_access_key: ${AWS_ACCESS_KEY_ID}
+  aws_secret_key: ${AWS_SECRET_ACCESS_KEY}
+```
+
+### Adding a module
+
+1. Create a package under `internal/discovery/` or `internal/scanners/` with
+   `New(config.Options) (*T, error)` and the `Discoverer` or `Scanner` methods
+   (`internal/registry/registry.go`).
+2. Add one line to the map in `registry.go`.
+3. Use it in `config.yaml`.
+
+## GCP setup
+
+`gcp/main.tf` creates a read-only service account with org-level `cloudasset.viewer`,
+`organizationViewer`, `folderViewer` and `browser`, and puts a key into Secret Manager. An org
+admin applies it by hand. The Terraform state contains the key, so keep it somewhere safe.
+
+```sh
+cd gcp && terraform init && terraform apply -var org_id=… -var project_id=…
+gcloud secrets versions access latest --secret exposure-scanner-key | jq -c .
+# put the output in .env as GCP_SERVICE_ACCOUNT_KEY='…' (single quotes)
+```
+
+Rotate the key every 90 days: `terraform apply -replace=google_service_account_key.scanner`,
+update `.env`, then `docker compose up -d scanner`.
+
+## Acceptance test
+
+1. Create a test VM with a public IP and something listening on port 8080, allowed by firewall.
+2. `docker compose run --rm scanner run-once`. Expect a *New public endpoints* alert for `<ip>:8080`.
+3. Remove the firewall rule and run again. Expect *Closed public endpoints*.
+
+## Operating notes
+
+- Check your hosting provider's acceptable-use policy on port scanning, and tell them in advance
+  if needed. Some (e.g. Hetzner) send abuse notices even for scans of your own IPs.
+- Never allowlist the scanner's IP in your firewalls, or the results stop reflecting the internet's view.
+- The scanner only scans targets that come from discovery; nothing else is ever touched.
+
+## Development
+
+```sh
+go test ./...
+golangci-lint run ./...            # includes gosec, config in .golangci.yml
+docker compose build
+```
+
+### Linting (for CI)
+
+Lint with [golangci-lint] v2.15.0 (`.golangci.yml`), which runs the standard linters plus
+[gosec], errorlint, bodyclose, noctx, revive and goimports. To suppress a gosec finding, write
+`// #nosec G304 -- reason`; both golangci-lint and standalone gosec honor it.
+
+Standalone gosec v2.29.0 also produces SARIF for GitHub code scanning. That release can't read
+Go 1.27 export data yet (it partly fails type-checking with "export data version 5"), so use the
+golangci-lint run as the gate until gosec ships a fix.
+
+Suggested GitHub Actions steps:
+
+```yaml
+- uses: actions/setup-go@v6
+  with: { go-version: "1.27.3" }
+- run: go test ./...
+- uses: golangci/golangci-lint-action@v9
+  with: { version: v2.15.0 }
+- run: go run github.com/securego/gosec/v2/cmd/gosec@v2.29.0 -no-fail -fmt sarif -out gosec.sarif ./...
+- uses: github/codeql-action/upload-sarif@v4
+  with: { sarif_file: gosec.sarif }
+```
+
+[cloudlist]: https://github.com/projectdiscovery/cloudlist
+[naabu]: https://github.com/projectdiscovery/naabu
+[httpx]: https://github.com/projectdiscovery/httpx
+[nuclei]: https://github.com/projectdiscovery/nuclei
+[NVD API]: https://nvd.nist.gov/developers/vulnerabilities
+[golangci-lint]: https://golangci-lint.run/
+[gosec]: https://github.com/securego/gosec
