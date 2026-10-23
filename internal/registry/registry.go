@@ -12,11 +12,14 @@ import (
 	"github.com/simonfrey/exposure-scanner/internal/discovery/gcpassetsearch"
 	"github.com/simonfrey/exposure-scanner/internal/discovery/staticlist"
 	"github.com/simonfrey/exposure-scanner/internal/model"
+	"github.com/simonfrey/exposure-scanner/internal/scanners/banner"
 	"github.com/simonfrey/exposure-scanner/internal/scanners/cvelookup"
 	"github.com/simonfrey/exposure-scanner/internal/scanners/exploitintel"
 	"github.com/simonfrey/exposure-scanner/internal/scanners/httpx"
 	"github.com/simonfrey/exposure-scanner/internal/scanners/naabu"
 	"github.com/simonfrey/exposure-scanner/internal/scanners/nuclei"
+	"github.com/simonfrey/exposure-scanner/internal/scanners/udp"
+	"github.com/simonfrey/exposure-scanner/internal/store"
 )
 
 // Discoverer lists public-facing assets from one source.
@@ -31,6 +34,11 @@ type Scanner interface {
 	Scan(ctx context.Context, sc *model.ScanContext) error
 }
 
+// StoreAware modules get the store before the first run, e.g. for a cache.
+type StoreAware interface {
+	SetStore(st *store.Store)
+}
+
 var discoverers = map[string]func(config.Options) (Discoverer, error){
 	"static_list":      adapt[Discoverer](staticlist.New),
 	"cloudlist":        adapt[Discoverer](cloudlist.New),
@@ -40,7 +48,9 @@ var discoverers = map[string]func(config.Options) (Discoverer, error){
 
 var scanners = map[string]func(config.Options) (Scanner, error){
 	"naabu":         adapt[Scanner](naabu.New),
+	"udp":           adapt[Scanner](udp.New),
 	"httpx":         adapt[Scanner](httpx.New),
+	"banner":        adapt[Scanner](banner.New),
 	"nuclei":        adapt[Scanner](nuclei.New),
 	"cve_lookup":    adapt[Scanner](cvelookup.New),
 	"exploit_intel": adapt[Scanner](exploitintel.New),

@@ -3,16 +3,20 @@
 package cvelookup
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/simonfrey/exposure-scanner/internal/config"
 	"github.com/simonfrey/exposure-scanner/internal/model"
+	"github.com/simonfrey/exposure-scanner/internal/store"
 )
 
 const nvdURL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
@@ -21,13 +25,23 @@ type CVELookup struct {
 	APIKey      string `yaml:"api_key"`      // optional, raises the NVD rate limit 10x
 	MinSeverity string `yaml:"min_severity"` // default medium
 	BaseURL     string `yaml:"base_url"`
+	// CacheTTLHours is how long a CPE's CVE list from NVD is reused. Older
+	// entries are refetched, but still used if NVD is unreachable.
+	CacheTTLHours int `yaml:"cache_ttl_hours"`
 
 	http     *http.Client
 	interval time.Duration
+	cache    cache
+}
+
+// cache persists NVD answers per CPE across runs (implemented by store.Store).
+type cache interface {
+	GetCVECache(ctx context.Context, cpes []string) (map[string]store.CVECacheEntry, error)
+	PutCVECache(ctx context.Context, entries map[string][]byte) error
 }
 
 func New(o config.Options) (*CVELookup, error) {
-	c := &CVELookup{MinSeverity: "medium", BaseURL: nvdURL, http: &http.Client{Timeout: 60 * time.Second}}
+	c := &CVELookup{MinSeverity: "medium", BaseURL: nvdURL, CacheTTLHours: 20, http: &http.Client{Timeout: 60 * time.Second}}
 	if err := o.Decode(c); err != nil {
 		return nil, err
 	}
@@ -41,38 +55,33 @@ func New(o config.Options) (*CVELookup, error) {
 
 func (c *CVELookup) Name() string { return "cve_lookup" }
 
+// SetStore enables the persistent CVE cache.
+func (c *CVELookup) SetStore(st *store.Store) {
+	if st != nil {
+		c.cache = st
+	}
+}
+
 type cve struct {
-	ID       string
-	Severity string
-	Score    float64
-	Summary  string
+	ID       string  `json:"id"`
+	Severity string  `json:"severity"`
+	Score    float64 `json:"score"`
+	Summary  string  `json:"summary"`
 }
 
 func (c *CVELookup) Scan(ctx context.Context, sc *model.ScanContext) error {
-	cache := map[string][]cve{}
-	var last time.Time
+	var cpes []string
+	for _, e := range sc.Endpoints {
+		cpes = append(cpes, e.CPE...)
+	}
+	slices.Sort(cpes)
+	cves, err := c.resolve(ctx, slices.Compact(cpes))
+	if err != nil {
+		return err
+	}
 	for _, e := range sc.Endpoints {
 		for _, cpe := range e.CPE {
-			cves, ok := cache[cpe]
-			if !ok {
-				var err error
-				// NVD returns sporadic 503s; retry a few times, backing off.
-				for attempt := 1; ; attempt++ {
-					if err := sleep(ctx, time.Duration(attempt)*c.interval-time.Since(last)); err != nil {
-						return err
-					}
-					cves, err = c.lookup(ctx, cpe)
-					last = time.Now()
-					if err == nil || attempt == 3 {
-						break
-					}
-				}
-				if err != nil {
-					return fmt.Errorf("nvd %s: %w", cpe, err)
-				}
-				cache[cpe] = cves
-			}
-			for _, v := range cves {
+			for _, v := range cves[cpe] {
 				if !model.SeverityAtLeast(v.Severity, c.MinSeverity) {
 					continue
 				}
@@ -80,7 +89,7 @@ func (c *CVELookup) Scan(ctx context.Context, sc *model.ScanContext) error {
 					TemplateID: v.ID,
 					Name:       v.Summary,
 					Severity:   v.Severity,
-					MatchedAt:  e.URL,
+					MatchedAt:  cmp.Or(e.URL, e.Addr()), // non-HTTP services (banner) have no URL
 					Target:     e.Host,
 					Scanner:    c.Name(),
 					Raw:        map[string]any{"cpe": cpe, "score": v.Score},
@@ -89,6 +98,65 @@ func (c *CVELookup) Scan(ctx context.Context, sc *model.ScanContext) error {
 		}
 	}
 	return nil
+}
+
+// resolve returns the CVEs per CPE, from the cache while fresh, otherwise
+// from NVD. If NVD fails, a stale cache entry is used instead of failing.
+func (c *CVELookup) resolve(ctx context.Context, cpes []string) (map[string][]cve, error) {
+	cached := map[string]store.CVECacheEntry{}
+	if c.cache != nil && len(cpes) > 0 {
+		var err error
+		if cached, err = c.cache.GetCVECache(ctx, cpes); err != nil {
+			return nil, fmt.Errorf("cve cache: %w", err)
+		}
+	}
+	ttl := time.Duration(c.CacheTTLHours) * time.Hour
+	out := make(map[string][]cve, len(cpes))
+	var last time.Time
+	for _, cpe := range cpes {
+		entry, hit := cached[cpe]
+		var old []cve
+		if hit && json.Unmarshal(entry.Data, &old) != nil {
+			hit = false // unreadable, e.g. written by an older version
+		}
+		if hit && time.Since(entry.FetchedAt) < ttl {
+			out[cpe] = old
+			continue
+		}
+		var fresh []cve
+		var err error
+		// NVD returns sporadic 503s; retry a few times, backing off.
+		for attempt := 1; ; attempt++ {
+			if err := sleep(ctx, time.Duration(attempt)*c.interval-time.Since(last)); err != nil {
+				return nil, err
+			}
+			fresh, err = c.lookup(ctx, cpe)
+			last = time.Now()
+			if err == nil || attempt == 3 {
+				break
+			}
+		}
+		switch {
+		case err == nil:
+			out[cpe] = fresh
+			if c.cache != nil {
+				data, merr := json.Marshal(fresh)
+				if merr == nil {
+					merr = c.cache.PutCVECache(ctx, map[string][]byte{cpe: data})
+				}
+				if merr != nil {
+					return nil, fmt.Errorf("cve cache: %w", merr)
+				}
+			}
+		case hit:
+			slog.Warn("NVD unreachable, using cached CVEs", "cpe", cpe,
+				"age", time.Since(entry.FetchedAt).Round(time.Hour), "err", err)
+			out[cpe] = old
+		default:
+			return nil, fmt.Errorf("nvd %s: %w", cpe, err)
+		}
+	}
+	return out, nil
 }
 
 func sleep(ctx context.Context, d time.Duration) error {

@@ -146,3 +146,22 @@ func TestUnique(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+
+func TestSplitTakeover(t *testing.T) {
+	scan, takeover := splitTakeover([]model.Asset{
+		{Kind: "hostname", Target: "www.example.com"},
+		{Kind: "takeover", Target: "old.example.com"},
+		{Kind: "compute", Target: "1.2.3.4"},
+	})
+	if len(scan) != 2 || len(takeover) != 1 || takeover[0].Target != "old.example.com" {
+		t.Fatalf("scan=%+v takeover=%+v", scan, takeover)
+	}
+}
+
+func TestStillOpenSkipsUDP(t *testing.T) {
+	prev := model.Snapshot{Endpoints: []model.Endpoint{{Host: "127.0.0.1", Port: 161, Protocol: "udp"}}}
+	names := map[string][]string{"127.0.0.1": {"127.0.0.1"}}
+	if eps, _ := stillOpen(context.Background(), prev, nil, names); len(eps) != 0 {
+		t.Fatalf("udp endpoint re-checked over tcp: %+v", eps)
+	}
+}

@@ -67,8 +67,24 @@ func (d *DNS) Discover(ctx context.Context) ([]model.Asset, error) {
 		slices.Sort(hosts)
 		for _, h := range slices.Compact(hosts) {
 			data, err := resolver.QueryMultiple(h)
-			if err != nil || data == nil || len(data.A)+len(data.AAAA) == 0 {
-				continue // stale subdomain, nothing to scan
+			if err != nil || data == nil {
+				continue // lookup failed, not enough to act on
+			}
+			if len(data.A)+len(data.AAAA) == 0 {
+				// Does not resolve. If it still points at a cloud resource via
+				// CNAME, it is a takeover candidate: someone may be able to
+				// claim that resource. Dead names without a CNAME are skipped.
+				if len(data.CNAME) == 0 {
+					continue
+				}
+				assets = append(assets, model.Asset{
+					Provider: "dns",
+					Account:  root,
+					Kind:     "takeover",
+					Name:     h,
+					Target:   h,
+				})
+				continue
 			}
 			assets = append(assets, model.Asset{
 				Provider: "dns",

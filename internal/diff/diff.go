@@ -2,7 +2,8 @@
 package diff
 
 import (
-	"strconv"
+	"cmp"
+	"math"
 
 	"github.com/simonfrey/exposure-scanner/internal/model"
 )
@@ -16,11 +17,10 @@ func Compute(prev, cur model.Snapshot) []model.Event {
 	endpointEvent := func(typ string, e model.Endpoint) model.Event {
 		a := owner[e.Host]
 		return model.Event{Type: typ, Target: e.Host, Port: e.Port, Provider: a.Provider, Account: a.Account,
-			Resource: a.Name, Detail: map[string]any{"ip": e.IP, "url": e.URL, "title": e.Title, "tech": e.Tech}}
+			Resource: a.Name, Detail: map[string]any{"ip": e.IP, "url": e.URL, "title": e.Title, "tech": e.Tech,
+				"protocol": cmp.Or(e.Protocol, "tcp"), "service": e.Service}}
 	}
-	added, removed := delta(prev.Endpoints, cur.Endpoints, func(e model.Endpoint) string {
-		return e.Host + "|" + strconv.Itoa(e.Port)
-	})
+	added, removed := delta(prev.Endpoints, cur.Endpoints, model.Endpoint.Key)
 	for _, e := range added {
 		events = append(events, endpointEvent(model.NewEndpoint, e))
 	}
@@ -43,6 +43,13 @@ func Compute(prev, cur model.Snapshot) []model.Event {
 	for _, f := range removedF {
 		events = append(events, findingEvent(model.ResolvedFinding, f))
 	}
+	for _, ch := range riskChanges(prev.Findings, cur.Findings) {
+		e := findingEvent(model.RiskChanged, ch.cur)
+		e.Detail["old_severity"], e.Detail["new_severity"] = ch.prev.Severity, ch.cur.Severity
+		e.Detail["old_exploited"], e.Detail["new_exploited"] = ch.prev.Exploited, ch.cur.Exploited
+		e.Detail["old_epss"], e.Detail["new_epss"] = ch.prev.EPSS, ch.cur.EPSS
+		events = append(events, e)
+	}
 
 	assetEvent := func(typ string, a model.Asset) model.Event {
 		return model.Event{Type: typ, Target: a.Target, Provider: a.Provider, Account: a.Account,
@@ -58,6 +65,36 @@ func Compute(prev, cur model.Snapshot) []model.Event {
 		events = append(events, assetEvent(model.RemovedAsset, a))
 	}
 	return events
+}
+
+// epssStep is the EPSS change (absolute probability) that counts as a risk
+// change. Scores move a little every day; smaller steps would be noise.
+const epssStep = 0.1
+
+type change struct{ prev, cur model.Finding }
+
+// riskChanges returns findings present in both runs whose risk changed:
+// another severity, newly listed as exploited, or a large EPSS move.
+func riskChanges(prev, cur []model.Finding) []change {
+	key := func(f model.Finding) string { return f.TemplateID + "|" + f.MatchedAt }
+	before := make(map[string]model.Finding, len(prev))
+	for _, f := range prev {
+		before[key(f)] = f
+	}
+	var out []change
+	seen := map[string]bool{}
+	for _, f := range cur {
+		k := key(f)
+		p, ok := before[k]
+		if !ok || seen[k] {
+			continue
+		}
+		seen[k] = true
+		if p.Severity != f.Severity || !p.Exploited && f.Exploited || math.Abs(f.EPSS-p.EPSS) >= epssStep {
+			out = append(out, change{p, f})
+		}
+	}
+	return out
 }
 
 // delta returns the items only in cur (added) and only in prev (removed).

@@ -5,9 +5,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/simonfrey/exposure-scanner/internal/config"
 	"github.com/simonfrey/exposure-scanner/internal/model"
+	"github.com/simonfrey/exposure-scanner/internal/store"
 )
 
 const nvdBody = `{"totalResults": 3, "vulnerabilities": [
@@ -73,5 +75,71 @@ func TestUnknownCPEIsNotAnError(t *testing.T) {
 	sc := &model.ScanContext{Endpoints: []model.Endpoint{{CPE: []string{"cpe:2.3:a:x:y:1:*:*:*:*:*:*:*"}}}}
 	if err := c.Scan(context.Background(), sc); err != nil || len(sc.Findings) != 0 {
 		t.Fatalf("err=%v findings=%v", err, sc.Findings)
+	}
+}
+
+type fakeCache map[string]store.CVECacheEntry
+
+func (f fakeCache) GetCVECache(_ context.Context, cpes []string) (map[string]store.CVECacheEntry, error) {
+	out := map[string]store.CVECacheEntry{}
+	for _, c := range cpes {
+		if e, ok := f[c]; ok {
+			out[c] = e
+		}
+	}
+	return out, nil
+}
+
+func (f fakeCache) PutCVECache(_ context.Context, entries map[string][]byte) error {
+	for c, d := range entries {
+		f[c] = store.CVECacheEntry{Data: d, FetchedAt: time.Now()}
+	}
+	return nil
+}
+
+func TestCache(t *testing.T) {
+	const cpe = "cpe:2.3:a:openbsd:openssh:9.6:p1:*:*:*:*:*:*"
+	cached := []byte(`[{"id":"CVE-2024-6387","severity":"high","score":8.1,"summary":"regreSSHion"}]`)
+	status := http.StatusOK
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(nvdBody))
+	}))
+	defer srv.Close()
+	scan := func(fc fakeCache) ([]model.Finding, error) {
+		c, _ := New(config.Options{"base_url": srv.URL})
+		c.interval, c.cache = 0, fc
+		sc := &model.ScanContext{Endpoints: []model.Endpoint{{Host: "a.example.com", Port: 22, CPE: []string{cpe}}}}
+		err := c.Scan(context.Background(), sc)
+		return sc.Findings, err
+	}
+
+	// Fresh entry: no NVD call. Findings of non-HTTP endpoints point at host:port.
+	calls = 0
+	got, err := scan(fakeCache{cpe: {Data: cached, FetchedAt: time.Now().Add(-time.Hour)}})
+	if err != nil || calls != 0 || len(got) != 1 || got[0].TemplateID != "CVE-2024-6387" || got[0].MatchedAt != "a.example.com:22" {
+		t.Fatalf("fresh: calls=%d err=%v findings=%+v", calls, err, got)
+	}
+
+	// Stale entry and NVD down: the stale entry is used.
+	calls, status = 0, http.StatusServiceUnavailable
+	got, err = scan(fakeCache{cpe: {Data: cached, FetchedAt: time.Now().Add(-48 * time.Hour)}})
+	if err != nil || calls != 3 || len(got) != 1 {
+		t.Fatalf("stale fallback: calls=%d err=%v findings=%+v", calls, err, got)
+	}
+
+	// No entry and NVD down: the run fails.
+	if _, err := scan(fakeCache{}); err == nil {
+		t.Fatal("miss with NVD down should fail")
+	}
+
+	// Stale entry and NVD up: refetched and written back.
+	status = http.StatusOK
+	fc := fakeCache{cpe: {Data: cached, FetchedAt: time.Now().Add(-48 * time.Hour)}}
+	got, err = scan(fc)
+	if err != nil || len(got) != 2 || time.Since(fc[cpe].FetchedAt) > time.Minute {
+		t.Fatalf("refresh: err=%v findings=%+v entry=%+v", err, got, fc[cpe])
 	}
 }

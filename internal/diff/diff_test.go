@@ -74,3 +74,43 @@ func TestDuplicatesCollapse(t *testing.T) {
 		t.Fatalf("want 1 event, got %d", n)
 	}
 }
+
+func TestRiskChanged(t *testing.T) {
+	f := model.Finding{TemplateID: "CVE-1", MatchedAt: "https://a", Target: "a", Severity: "medium", EPSS: 0.10}
+	with := func(mod func(*model.Finding)) model.Snapshot {
+		g := f
+		mod(&g)
+		return model.Snapshot{Findings: []model.Finding{g}}
+	}
+	prev := model.Snapshot{Findings: []model.Finding{f}}
+	for name, tc := range map[string]struct {
+		cur  model.Snapshot
+		want bool
+	}{
+		"unchanged":        {with(func(*model.Finding) {}), false},
+		"small epss move":  {with(func(g *model.Finding) { g.EPSS = 0.15 }), false},
+		"large epss move":  {with(func(g *model.Finding) { g.EPSS = 0.35 }), true},
+		"now exploited":    {with(func(g *model.Finding) { g.Exploited = true }), true},
+		"severity raised":  {with(func(g *model.Finding) { g.Severity = "critical" }), true},
+		"severity lowered": {with(func(g *model.Finding) { g.Severity = "low" }), true},
+	} {
+		events := Compute(prev, tc.cur)
+		got := types(events)[model.RiskChanged] == 1
+		if got != tc.want || len(events) != map[bool]int{true: 1, false: 0}[tc.want] {
+			t.Errorf("%s: events %+v", name, events)
+		}
+	}
+	e := Compute(prev, with(func(g *model.Finding) { g.Exploited, g.Severity = true, "high" }))[0]
+	if e.Severity != "high" || e.Detail["old_severity"] != "medium" || e.Detail["new_exploited"] != true {
+		t.Errorf("detail: %+v", e)
+	}
+}
+
+func TestUDPAndTCPOnSamePortAreDistinct(t *testing.T) {
+	prev := model.Snapshot{Endpoints: []model.Endpoint{{Host: "a", Port: 53, Protocol: "tcp"}}}
+	cur := model.Snapshot{Endpoints: []model.Endpoint{{Host: "a", Port: 53}, {Host: "a", Port: 53, Protocol: "udp"}}}
+	events := Compute(prev, cur)
+	if len(events) != 1 || events[0].Type != model.NewEndpoint || events[0].Detail["protocol"] != "udp" {
+		t.Fatalf("want one new udp endpoint (tcp and empty protocol are the same), got %+v", events)
+	}
+}

@@ -16,11 +16,11 @@ func TestUnknownModuleFails(t *testing.T) {
 }
 
 func TestBuildsInConfigOrder(t *testing.T) {
-	s, err := Scanners([]config.Module{{Use: "cve_lookup"}, {Use: "naabu"}, {Use: "httpx"}, {Use: "nuclei"}})
+	s, err := Scanners([]config.Module{{Use: "cve_lookup"}, {Use: "naabu"}, {Use: "udp"}, {Use: "httpx"}, {Use: "banner"}, {Use: "nuclei"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"cve_lookup", "naabu", "httpx", "nuclei"}
+	want := []string{"cve_lookup", "naabu", "udp", "httpx", "banner", "nuclei"}
 	for i, sc := range s {
 		if sc.Name() != want[i] {
 			t.Fatalf("position %d: got %s, want %s", i, sc.Name(), want[i])

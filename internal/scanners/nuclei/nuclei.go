@@ -5,6 +5,7 @@ package nuclei
 import (
 	"cmp"
 	"context"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -20,8 +21,12 @@ type Nuclei struct {
 	Severities  []string `yaml:"severities"`
 	Tags        []string `yaml:"tags"`         // only templates with one of these tags; empty = all
 	ExcludeTags []string `yaml:"exclude_tags"` // never run, e.g. dos
-	RateLimit   int      `yaml:"rate_limit"`   // requests per second across all hosts
-	Concurrency int      `yaml:"concurrency"`
+	ExcludeIDs  []string `yaml:"exclude_ids"`  // never run these template ids
+	// TakeoverCandidates also scans hostnames with a dangling CNAME (from
+	// dns discovery), for the dns and http takeover templates.
+	TakeoverCandidates bool `yaml:"takeover_candidates"`
+	RateLimit          int  `yaml:"rate_limit"` // requests per second across all hosts
+	Concurrency        int  `yaml:"concurrency"`
 }
 
 func New(o config.Options) (*Nuclei, error) {
@@ -36,17 +41,30 @@ func New(o config.Options) (*Nuclei, error) {
 
 func (n *Nuclei) Name() string { return "nuclei" }
 
-func (n *Nuclei) Scan(ctx context.Context, sc *model.ScanContext) error {
-	if len(sc.Endpoints) == 0 {
-		return nil
-	}
-	targets := make([]string, 0, len(sc.Endpoints))
+// targets returns the URL of HTTP endpoints, host:port of other TCP
+// endpoints and, if enabled, the takeover candidate hostnames.
+func (n *Nuclei) targets(sc *model.ScanContext) []string {
+	var out []string
 	for _, e := range sc.Endpoints {
-		if e.URL != "" {
-			targets = append(targets, e.URL)
-		} else {
-			targets = append(targets, e.Addr())
+		switch {
+		case e.Protocol == "udp":
+			// nuclei's network templates speak TCP
+		case e.URL != "":
+			out = append(out, e.URL)
+		default:
+			out = append(out, e.Addr())
 		}
+	}
+	if n.TakeoverCandidates {
+		out = append(out, sc.TakeoverCandidates...)
+	}
+	return out
+}
+
+func (n *Nuclei) Scan(ctx context.Context, sc *model.ScanContext) error {
+	targets := n.targets(sc)
+	if len(targets) == 0 {
+		return nil
 	}
 
 	c := n.Concurrency
@@ -55,6 +73,7 @@ func (n *Nuclei) Scan(ctx context.Context, sc *model.ScanContext) error {
 			Severity:    strings.Join(n.Severities, ","),
 			Tags:        n.Tags,
 			ExcludeTags: n.ExcludeTags,
+			ExcludeIDs:  n.ExcludeIDs,
 		}),
 		nuclei.WithGlobalRateLimitCtx(ctx, n.RateLimit, time.Second),
 		nuclei.WithConcurrency(nuclei.Concurrency{
@@ -75,7 +94,22 @@ func (n *Nuclei) Scan(ctx context.Context, sc *model.ScanContext) error {
 	ne.LoadTargets(targets, false)
 
 	var mu sync.Mutex
+	skipped := map[string]int{} // host -> templates not run because it stopped responding
+	defer func() {
+		if len(skipped) > 0 {
+			slog.Warn("nuclei skipped templates on unresponsive hosts", "module", n.Name(), "hosts", skipped)
+		}
+	}()
 	return ne.ExecuteCallbackWithCtx(ctx, func(ev *output.ResultEvent) {
+		if !ev.MatcherStatus {
+			// Failure event, not a match. Count skips so they are visible.
+			if strings.Contains(ev.Error, "unresponsive") {
+				mu.Lock()
+				skipped[ev.Host]++
+				mu.Unlock()
+			}
+			return
+		}
 		matched := ev.Matched
 		if matched == "" {
 			matched = ev.URL

@@ -18,10 +18,15 @@ type HTTPX struct {
 	Threads   int `yaml:"threads"`
 	RateLimit int `yaml:"rate_limit"` // requests per second
 	Timeout   int `yaml:"timeout"`    // seconds
+	// FollowHostRedirects follows redirects that stay on the same host, so
+	// "/" -> "/login" reports the real page. Redirects to other hosts (SSO,
+	// a CDN) are never followed: their title and software are not ours.
+	FollowHostRedirects bool `yaml:"follow_host_redirects"`
+	MaxRedirects        int  `yaml:"max_redirects"`
 }
 
 func New(o config.Options) (*HTTPX, error) {
-	h := &HTTPX{Threads: 25, RateLimit: 50, Timeout: 10}
+	h := &HTTPX{Threads: 25, RateLimit: 50, Timeout: 10, FollowHostRedirects: true, MaxRedirects: 3}
 	return h, o.Decode(h)
 }
 
@@ -35,26 +40,34 @@ func (h *HTTPX) Scan(_ context.Context, sc *model.ScanContext) error {
 	var inputs goflags.StringSlice
 	for i := range sc.Endpoints {
 		e := &sc.Endpoints[i]
+		if e.Protocol == "udp" {
+			continue
+		}
 		byAddr[e.Addr()] = e
 		inputs = append(inputs, e.Addr())
+	}
+	if len(inputs) == 0 {
+		return nil
 	}
 
 	var mu sync.Mutex
 	opts := &runner.Options{
-		Methods:            "GET",
-		InputTargetHost:    inputs,
-		Threads:            h.Threads,
-		RateLimit:          h.RateLimit,
-		Timeout:            h.Timeout,
-		Retries:            1,
-		TechDetect:         true,
-		ExtractTitle:       true,
-		StatusCode:         true,
-		FollowRedirects:    false,
-		DisableStdin:       true,
-		DisableUpdateCheck: true,
-		Silent:             true,
-		DisableStdout:      true,
+		Methods:             "GET",
+		InputTargetHost:     inputs,
+		Threads:             h.Threads,
+		RateLimit:           h.RateLimit,
+		Timeout:             h.Timeout,
+		Retries:             1,
+		TechDetect:          true,
+		ExtractTitle:        true,
+		StatusCode:          true,
+		FollowRedirects:     false,
+		FollowHostRedirects: h.FollowHostRedirects,
+		MaxRedirects:        h.MaxRedirects,
+		DisableStdin:        true,
+		DisableUpdateCheck:  true,
+		Silent:              true,
+		DisableStdout:       true,
 		OnResult: func(r runner.Result) {
 			if r.Err != nil || r.Failed {
 				return

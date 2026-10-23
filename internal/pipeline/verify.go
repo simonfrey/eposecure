@@ -20,7 +20,7 @@ import (
 func stillOpen(ctx context.Context, prev model.Snapshot, cur []model.Endpoint, names map[string][]string) ([]model.Endpoint, []model.Finding) {
 	found := map[string]bool{}
 	for _, e := range cur {
-		found[e.Addr()] = true
+		found[e.Key()] = true
 	}
 	targets := map[string]bool{}
 	for _, list := range names {
@@ -35,8 +35,8 @@ func stillOpen(ctx context.Context, prev model.Snapshot, cur []model.Endpoint, n
 	var g errgroup.Group
 	g.SetLimit(20)
 	for _, e := range prev.Endpoints {
-		if found[e.Addr()] || !targets[e.Host] {
-			continue // still found, or no longer in the inventory
+		if found[e.Key()] || !targets[e.Host] || e.Protocol == "udp" {
+			continue // still found, no longer in the inventory, or UDP (no connection to test)
 		}
 		g.Go(func() error {
 			if !accepts(ctx, e.Addr()) {

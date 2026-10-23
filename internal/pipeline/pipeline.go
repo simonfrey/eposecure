@@ -46,6 +46,11 @@ func New(cfg *config.Config, st *store.Store) (*Pipeline, error) {
 	if err != nil {
 		return nil, err
 	}
+	for _, sc := range s {
+		if sa, ok := sc.(registry.StoreAware); ok {
+			sa.SetStore(st)
+		}
+	}
 	return &Pipeline{discoverers: d, scanners: s, exclude: cfg.Exclude, maxDropPct: cfg.MaxEndpointDropPct, store: st}, nil
 }
 
@@ -121,9 +126,10 @@ func (p *Pipeline) scan(ctx context.Context, log *slog.Logger) (model.Snapshot, 
 	}
 	snap.Assets = slices.Concat(results...)
 
-	sc := &model.ScanContext{}
-	sc.Targets, sc.Names = resolve(ctx, log, targets(snap.Assets, p.exclude), p.exclude)
-	log.Info("scanning", "ips", len(sc.Targets))
+	scan, takeover := splitTakeover(snap.Assets)
+	sc := &model.ScanContext{TakeoverCandidates: targets(takeover, p.exclude)}
+	sc.Targets, sc.Names = resolve(ctx, log, targets(scan, p.exclude), p.exclude)
+	log.Info("scanning", "ips", len(sc.Targets), "takeover_candidates", len(sc.TakeoverCandidates))
 	for _, s := range p.scanners {
 		if err := s.Scan(ctx, sc); err != nil {
 			return snap, nil, fmt.Errorf("scanner %s: %w", s.Name(), err)
@@ -132,6 +138,19 @@ func (p *Pipeline) scan(ctx context.Context, log *slog.Logger) (model.Snapshot, 
 	}
 	snap.Endpoints, snap.Findings = sc.Endpoints, unique(sc.Findings)
 	return snap, sc.Names, nil
+}
+
+// splitTakeover separates hostnames that only have a dangling CNAME (kind
+// "takeover"): they cannot be port-scanned, only checked for takeover.
+func splitTakeover(assets []model.Asset) (scan, takeover []model.Asset) {
+	for _, a := range assets {
+		if a.Kind == "takeover" {
+			takeover = append(takeover, a)
+		} else {
+			scan = append(scan, a)
+		}
+	}
+	return scan, takeover
 }
 
 // unique drops repeated findings (same id at the same place), which happens

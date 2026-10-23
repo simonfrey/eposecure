@@ -27,10 +27,23 @@ type Endpoint struct {
 	Tech       []string // "app" or "app:version"
 	CPE        []string // versioned CPE 2.3 strings
 	Scanner    string
+	// Service is the detected service on non-HTTP ports ("ssh", "redis",
+	// "mysql", "dns", ...). Empty for plain TCP/HTTP endpoints.
+	Service string
+	// Protocol is "tcp" (default, also when empty) or "udp".
+	Protocol string
 }
 
 // Addr returns host:port.
 func (e Endpoint) Addr() string { return net.JoinHostPort(e.Host, strconv.Itoa(e.Port)) }
+
+// Key identifies the endpoint across runs: host:port for TCP, host:port/udp for UDP.
+func (e Endpoint) Key() string {
+	if e.Protocol == "udp" {
+		return e.Addr() + "/udp"
+	}
+	return e.Addr()
+}
 
 // Finding is a vulnerability or misconfiguration on an endpoint.
 type Finding struct {
@@ -57,6 +70,10 @@ type ScanContext struct {
 	Names     map[string][]string
 	Endpoints []Endpoint
 	Findings  []Finding
+	// TakeoverCandidates are hostnames from discovery that do not resolve
+	// but still have a CNAME. nuclei's takeover templates check whether the
+	// resource behind them can be claimed.
+	TakeoverCandidates []string
 }
 
 // Snapshot is the complete result of one successful run.
@@ -74,6 +91,7 @@ const (
 	ResolvedFinding = "resolved_finding"
 	NewAsset        = "new_asset"
 	RemovedAsset    = "removed_asset"
+	RiskChanged     = "risk_changed"
 )
 
 // Event is a change between the previous and the current run.

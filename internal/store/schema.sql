@@ -46,12 +46,24 @@ ALTER TABLE findings
     ADD COLUMN IF NOT EXISTS exploited boolean NOT NULL DEFAULT false, -- in CISA KEV
     ADD COLUMN IF NOT EXISTS epss real;                                 -- exploit probability 0..1
 
+ALTER TABLE endpoints
+    ADD COLUMN IF NOT EXISTS service text,           -- ssh, redis, mysql, dns, ...
+    ADD COLUMN IF NOT EXISTS protocol text NOT NULL DEFAULT 'tcp';
+
+-- NVD answers cached per CPE so runs do not re-fetch every CVE list.
+CREATE TABLE IF NOT EXISTS cve_cache (
+    cpe        text PRIMARY KEY,
+    cves       jsonb NOT NULL,
+    fetched_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS assets_run_idx    ON assets (run_id);
 CREATE INDEX IF NOT EXISTS endpoints_run_idx ON endpoints (run_id);
 CREATE INDEX IF NOT EXISTS findings_run_idx  ON findings (run_id);
 CREATE INDEX IF NOT EXISTS events_run_idx    ON events (run_id);
 CREATE INDEX IF NOT EXISTS findings_key_idx  ON findings (template_id, matched_at, run_id);
 CREATE INDEX IF NOT EXISTS endpoints_key_idx ON endpoints (host, port, run_id);
+CREATE INDEX IF NOT EXISTS cve_cache_idx     ON cve_cache (fetched_at);
 
 -- Views are recreated on every start so their columns can change freely.
 DROP VIEW IF EXISTS v_latest_run, v_run_stats, v_baseline, v_run_deltas, v_current_endpoints,

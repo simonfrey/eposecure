@@ -2,10 +2,12 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -100,9 +102,13 @@ func (s *Store) FinishRun(ctx context.Context, id int64, snap model.Snapshot, ev
 				rows(snap.Assets, func(a model.Asset) []any {
 					return []any{id, a.Provider, a.Account, a.Kind, a.Name, a.Target, a.Source}
 				})},
-			{"endpoints", []string{"run_id", "host", "ip", "port", "url", "http_status", "title", "tech", "cpe", "scanner"},
+			{"endpoints", []string{"run_id", "host", "ip", "port", "url", "http_status", "title", "tech", "cpe", "scanner", "service", "protocol"},
 				rows(snap.Endpoints, func(e model.Endpoint) []any {
-					return []any{id, e.Host, e.IP, e.Port, e.URL, e.HTTPStatus, e.Title, e.Tech, e.CPE, e.Scanner}
+					proto := e.Protocol
+					if proto == "" {
+						proto = "tcp"
+					}
+					return []any{id, e.Host, e.IP, e.Port, e.URL, e.HTTPStatus, e.Title, e.Tech, e.CPE, e.Scanner, e.Service, proto}
 				})},
 			{"findings", []string{"run_id", "template_id", "name", "severity", "matched_at", "target", "scanner",
 				"tags", "exploited", "epss", "raw"},
@@ -147,9 +153,11 @@ func (s *Store) LastSnapshot(ctx context.Context) (model.Snapshot, error) {
 		return snap, err
 	}
 	snap.Endpoints, err = query(ctx, s.db, `SELECT host, ip, port, coalesce(url, ''), coalesce(http_status, 0),
-		coalesce(title, ''), tech, cpe FROM endpoints WHERE run_id = $1`, id,
+		coalesce(title, ''), tech, cpe, coalesce(scanner, ''), coalesce(service, ''), coalesce(protocol, 'tcp')
+		FROM endpoints WHERE run_id = $1`, id,
 		func(r pgx.CollectableRow) (e model.Endpoint, err error) {
-			err = r.Scan(&e.Host, &e.IP, &e.Port, &e.URL, &e.HTTPStatus, &e.Title, &e.Tech, &e.CPE)
+			err = r.Scan(&e.Host, &e.IP, &e.Port, &e.URL, &e.HTTPStatus, &e.Title, &e.Tech, &e.CPE,
+				&e.Scanner, &e.Service, &e.Protocol)
 			return
 		})
 	if err != nil {
@@ -171,6 +179,48 @@ func query[T any](ctx context.Context, db *pgxpool.Pool, sql string, id int64, s
 		return nil, err
 	}
 	return pgx.CollectRows(r, scan)
+}
+
+// CVECacheEntry is one CPE's cached NVD answer. Data is the raw JSON of the
+// scanner's own result type, so the store stays scanner-agnostic.
+type CVECacheEntry struct {
+	Data      []byte
+	FetchedAt time.Time
+}
+
+// GetCVECache loads cached NVD answers for the given CPEs. Missing CPEs are
+// simply absent from the returned map.
+func (s *Store) GetCVECache(ctx context.Context, cpes []string) (map[string]CVECacheEntry, error) {
+	out := make(map[string]CVECacheEntry, len(cpes))
+	if len(cpes) == 0 {
+		return out, nil
+	}
+	rows, err := s.db.Query(ctx, `SELECT cpe, cves::text, fetched_at FROM cve_cache WHERE cpe = ANY($1)`, cpes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cpe, data string
+		var e CVECacheEntry
+		if err := rows.Scan(&cpe, &data, &e.FetchedAt); err != nil {
+			return nil, err
+		}
+		e.Data = []byte(data)
+		out[cpe] = e
+	}
+	return out, rows.Err()
+}
+
+// PutCVECache stores NVD answers per CPE, replacing any previous value.
+func (s *Store) PutCVECache(ctx context.Context, entries map[string][]byte) error {
+	for cpe, data := range entries {
+		if _, err := s.db.Exec(ctx, `INSERT INTO cve_cache (cpe, cves, fetched_at) VALUES ($1, $2, now())
+			ON CONFLICT (cpe) DO UPDATE SET cves = excluded.cves, fetched_at = now()`, cpe, json.RawMessage(data)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func rows[T any](items []T, f func(T) []any) [][]any {
@@ -196,5 +246,30 @@ func jsonb(v any) []byte {
 	if err != nil {
 		return nil
 	}
-	return b
+	return stripNUL(b)
+}
+
+// stripNUL replaces the escape \u0000 in JSON with \ufffd: Postgres jsonb
+// rejects NUL, and raw responses of binary protocols (e.g. a nuclei network
+// template against Redis) contain it. Escape pairs are walked so that an
+// escaped backslash followed by "u0000" is left alone.
+func stripNUL(b []byte) []byte {
+	if !bytes.Contains(b, []byte(`\u0000`)) {
+		return b
+	}
+	out := make([]byte, 0, len(b))
+	for i := 0; i < len(b); i++ {
+		if b[i] != '\\' || i+1 >= len(b) {
+			out = append(out, b[i])
+			continue
+		}
+		if bytes.HasPrefix(b[i:], []byte(`\u0000`)) {
+			out = append(out, `\ufffd`...)
+			i += 5
+			continue
+		}
+		out = append(out, b[i], b[i+1]) // any other escape pair, e.g. \\
+		i++
+	}
+	return out
 }
