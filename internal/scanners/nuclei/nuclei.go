@@ -3,6 +3,7 @@
 package nuclei
 
 import (
+	"cmp"
 	"context"
 	"strings"
 	"sync"
@@ -79,10 +80,16 @@ func (n *Nuclei) Scan(ctx context.Context, sc *model.ScanContext) error {
 		if matched == "" {
 			matched = ev.URL
 		}
+		// One template can match several ways at one URL (e.g. each missing
+		// header); like the nuclei CLI, tell them apart as template:matcher.
+		id := ev.TemplateID
+		if sub := cmp.Or(ev.MatcherName, ev.ExtractorName); sub != "" {
+			id += ":" + sub
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		sc.Findings = append(sc.Findings, model.Finding{
-			TemplateID: ev.TemplateID,
+			TemplateID: id,
 			Name:       ev.Info.Name,
 			Severity:   ev.Info.SeverityHolder.Severity.String(),
 			MatchedAt:  matched,
