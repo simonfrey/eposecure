@@ -34,6 +34,13 @@ CREATE TABLE IF NOT EXISTS events (
 
 CREATE TABLE IF NOT EXISTS settings (key text PRIMARY KEY, value text);
 
+-- Findings someone has looked at and accepted, inserted by hand. They stay
+-- visible on the dashboard but no longer alert. until = NULL means forever.
+CREATE TABLE IF NOT EXISTS accepted (
+    template_id text, matched_at text, reason text NOT NULL, until date,
+    PRIMARY KEY (template_id, matched_at)
+);
+
 ALTER TABLE findings
     ADD COLUMN IF NOT EXISTS tags text[],
     ADD COLUMN IF NOT EXISTS exploited boolean NOT NULL DEFAULT false, -- in CISA KEV
@@ -43,10 +50,13 @@ CREATE INDEX IF NOT EXISTS assets_run_idx    ON assets (run_id);
 CREATE INDEX IF NOT EXISTS endpoints_run_idx ON endpoints (run_id);
 CREATE INDEX IF NOT EXISTS findings_run_idx  ON findings (run_id);
 CREATE INDEX IF NOT EXISTS events_run_idx    ON events (run_id);
+CREATE INDEX IF NOT EXISTS findings_key_idx  ON findings (template_id, matched_at, run_id);
+CREATE INDEX IF NOT EXISTS endpoints_key_idx ON endpoints (host, port, run_id);
 
 -- Views are recreated on every start so their columns can change freely.
 DROP VIEW IF EXISTS v_latest_run, v_run_stats, v_baseline, v_run_deltas, v_current_endpoints,
-    v_current_findings, v_events, v_latest_events CASCADE;
+    v_current_findings, v_events, v_latest_events, v_endpoint_ages, v_finding_ages CASCADE;
+
 
 -- Latest successful run.
 CREATE VIEW v_latest_run AS
@@ -89,11 +99,34 @@ FROM v_run_stats s
 LEFT JOIN v_run_stats b ON b.run_id = (SELECT run_id FROM v_baseline)
 WINDOW w AS (ORDER BY s.run_id);
 
+-- Since when an endpoint or finding of the latest run has been there without
+-- a gap: the first run after the last successful run that did not have it.
+CREATE VIEW v_endpoint_ages AS
+WITH ok AS (SELECT id, finished_at FROM runs WHERE status = 'success')
+SELECT c.host, c.port,
+       (SELECT min(finished_at) FROM ok WHERE ok.id > coalesce((
+            SELECT max(o.id) FROM ok o WHERE NOT EXISTS (
+                SELECT 1 FROM endpoints x WHERE x.run_id = o.id AND x.host = c.host AND x.port = c.port)), 0)
+       ) AS first_seen
+FROM (SELECT DISTINCT host, port FROM endpoints WHERE run_id = (SELECT id FROM v_latest_run)) c;
+
+CREATE VIEW v_finding_ages AS
+WITH ok AS (SELECT id, finished_at FROM runs WHERE status = 'success')
+SELECT c.template_id, c.matched_at,
+       (SELECT min(finished_at) FROM ok WHERE ok.id > coalesce((
+            SELECT max(o.id) FROM ok o WHERE NOT EXISTS (
+                SELECT 1 FROM findings x WHERE x.run_id = o.id
+                  AND x.template_id = c.template_id AND x.matched_at = c.matched_at)), 0)
+       ) AS first_seen
+FROM (SELECT DISTINCT template_id, matched_at FROM findings WHERE run_id = (SELECT id FROM v_latest_run)) c;
+
 -- Current state, joined with the asset that produced each target.
 CREATE VIEW v_current_endpoints AS
-SELECT e.*, a.provider, a.account, a.name AS resource, a.source
+SELECT e.*, a.provider, a.account, a.name AS resource, a.source,
+       g.first_seen, extract(day FROM now() - g.first_seen)::int AS age_days
 FROM endpoints e
 JOIN v_latest_run r ON e.run_id = r.id
+LEFT JOIN v_endpoint_ages g ON g.host = e.host AND g.port = e.port
 LEFT JOIN LATERAL (
     SELECT provider, account, name, source FROM assets
     WHERE run_id = e.run_id AND target = e.host LIMIT 1
@@ -102,17 +135,26 @@ LEFT JOIN LATERAL (
 CREATE VIEW v_current_findings AS
 SELECT f.run_id, f.template_id, f.name, f.severity, f.matched_at, f.target, f.scanner,
        a.provider, a.account, a.name AS resource,
-       f.tags, f.exploited, f.epss
+       f.tags, f.exploited, f.epss,
+       g.first_seen, extract(day FROM now() - g.first_seen)::int AS age_days,
+       acc.reason IS NOT NULL AS accepted, acc.reason AS accepted_reason
 FROM findings f
 JOIN v_latest_run r ON f.run_id = r.id
+LEFT JOIN v_finding_ages g ON g.template_id = f.template_id AND g.matched_at = f.matched_at
+LEFT JOIN accepted acc ON acc.template_id = f.template_id AND acc.matched_at = f.matched_at
+    AND (acc.until IS NULL OR acc.until >= current_date)
 LEFT JOIN LATERAL (
     SELECT provider, account, name FROM assets
     WHERE run_id = f.run_id AND target = f.target LIMIT 1
 ) a ON true;
 
--- Events with the time of their run.
+-- Events with the time of their run. Finding events carry accepted, so
+-- alert rules can skip them.
 CREATE VIEW v_events AS
-SELECT r.finished_at, ev.*
+SELECT r.finished_at, ev.*,
+       EXISTS (SELECT 1 FROM accepted acc
+               WHERE acc.template_id = ev.detail->>'template_id' AND acc.matched_at = ev.detail->>'matched_at'
+                 AND (acc.until IS NULL OR acc.until >= current_date)) AS accepted
 FROM events ev JOIN runs r ON r.id = ev.run_id;
 
 CREATE VIEW v_latest_events AS
