@@ -1,0 +1,169 @@
+# Alert rules over the SQL views. Each query returns one row per alert
+# instance: text columns become labels, the "value" column is checked > 0.
+# Event rules look at runs finished in the last 20 minutes, so every run is
+# reported once (rules evaluate every 5 minutes).
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: exposure
+    folder: Exposure
+    interval: 5m
+    rules:
+      - uid: run-report
+        title: Scan report
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          title: Exposure scan finished
+          summary: >-
+            Run {{ $labels.run_id }}: {{ $labels.endpoints }} public endpoints, {{ $labels.change }}.
+            {{ $labels.progress }}.
+            Findings: {{ $labels.critical }} critical, {{ $labels.high }} high, {{ $labels.medium }} medium.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: exposure-pg
+            model:
+              refId: A
+              format: table
+              rawQuery: true
+              editorMode: code
+              rawSql: |
+                SELECT run_id::text AS run_id,
+                       endpoints::text AS endpoints,
+                       CASE
+                         WHEN endpoints_delta IS NULL THEN 'first run'
+                         WHEN endpoints_delta = 0 THEN 'no change since last run'
+                         WHEN endpoints_delta < 0 THEN abs(endpoints_delta) || ' fewer than last run (' || abs(endpoints_delta_pct) || '%)'
+                         ELSE endpoints_delta || ' more than last run' || coalesce(' (+' || endpoints_delta_pct || '%)', '')
+                       END AS change,
+                       CASE
+                         WHEN run_id = (SELECT run_id FROM v_baseline) THEN 'this run is the baseline for progress'
+                         WHEN coalesce(baseline_endpoints, 0) = 0 THEN 'no baseline yet'
+                         WHEN progress_pct >= 0 THEN progress_pct || '% fewer endpoints than baseline (' || baseline_endpoints || ')'
+                         ELSE abs(progress_pct) || '% more endpoints than baseline (' || baseline_endpoints || ')'
+                       END AS progress,
+                       critical::text AS critical, high::text AS high, medium::text AS medium,
+                       1 AS value
+                FROM v_run_deltas
+                WHERE finished_at > now() - interval '20 minutes'
+          - &threshold
+            refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      - uid: new-public-endpoints
+        title: New public endpoints
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning }
+        annotations:
+          title: New public endpoints
+          summary: '{{ $labels.target }}:{{ $labels.port }} {{ $labels.provider }} {{ $labels.account }} {{ $labels.resource }}'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: exposure-pg
+            model:
+              refId: A
+              format: table
+              rawQuery: true
+              editorMode: code
+              rawSql: |
+                SELECT target, port::text AS port, provider, account, resource, 1 AS value
+                FROM v_latest_events
+                WHERE type = 'new_endpoint' AND finished_at > now() - interval '20 minutes'
+          - *threshold
+
+      - uid: closed-public-endpoints
+        title: Closed public endpoints
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: info }
+        annotations:
+          title: Public endpoints closed
+          summary: '{{ $labels.target }}:{{ $labels.port }} {{ $labels.provider }} {{ $labels.account }} {{ $labels.resource }}'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: exposure-pg
+            model:
+              refId: A
+              format: table
+              rawQuery: true
+              editorMode: code
+              rawSql: |
+                SELECT target, port::text AS port, provider, account, resource, 1 AS value
+                FROM v_latest_events
+                WHERE type = 'closed_endpoint' AND finished_at > now() - interval '20 minutes'
+          - *threshold
+
+      - uid: new-findings
+        title: New findings
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          title: New vulnerability findings
+          summary: '[{{ $labels.severity }}] {{ $labels.template_id }} at {{ $labels.matched_at }}{{ with $labels.account }} ({{ . }}){{ end }}: {{ $labels.name }}'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: exposure-pg
+            model:
+              refId: A
+              format: table
+              rawQuery: true
+              editorMode: code
+              rawSql: |
+                SELECT severity, target, account,
+                       detail->>'template_id' AS template_id,
+                       detail->>'matched_at' AS matched_at,
+                       left(detail->>'name', 200) AS name,
+                       1 AS value
+                FROM v_latest_events
+                WHERE type = 'new_finding'
+                  AND severity IN ('medium', 'high', 'critical')
+                  AND finished_at > now() - interval '20 minutes'
+          - *threshold
+
+      - uid: scan-stale-or-failed
+        title: Scan failed or stale
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning }
+        annotations:
+          title: Exposure scanner needs attention
+          summary: '{{ $labels.reason }}'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: exposure-pg
+            model:
+              refId: A
+              format: table
+              rawQuery: true
+              editorMode: code
+              rawSql: |
+                SELECT 'last run ' || id || ' failed: ' || left(coalesce(error, ''), 300) AS reason, 1 AS value
+                FROM (SELECT id, status, error FROM runs WHERE status <> 'running' ORDER BY id DESC LIMIT 1) last
+                WHERE status = 'failed'
+                UNION ALL
+                SELECT 'no successful run in the last 36 hours', 1
+                WHERE (SELECT coalesce(max(finished_at) FILTER (WHERE status = 'success'), min(started_at)) FROM runs)
+                      < now() - interval '36 hours'
+          - *threshold

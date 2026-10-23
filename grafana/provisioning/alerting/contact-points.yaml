@@ -1,0 +1,20 @@
+apiVersion: 1
+contactPoints:
+  - orgId: 1
+    name: slack-exposure
+    receivers:
+      - uid: slack-exposure
+        type: slack
+        disableResolveMessage: true
+        settings:
+          url: $SLACK_WEBHOOK_URL
+          title: '{{ template "exposure.title" . }}'
+          text: '{{ template "exposure.text" . }}'
+
+templates:
+  - orgId: 1
+    name: exposure
+    template: |
+      {{ define "exposure.title" }}{{ .CommonAnnotations.title }}{{ end }}
+      {{ define "exposure.text" }}{{ range .Alerts.Firing }}• {{ .Annotations.summary }}
+      {{ end }}{{ end }}
