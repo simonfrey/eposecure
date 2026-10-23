@@ -1,0 +1,50 @@
+# Copy to config.yaml. ${VAR} is replaced with the environment variable VAR
+# (from .env). Modules run in the order listed. Every module takes its own options.
+
+discovery: # all run in parallel; if one fails the run fails and nothing is diffed
+  # Any cloudlist provider works here: gcp, aws, azure, digitalocean, hetzner,
+  # cloudflare, ... See https://github.com/projectdiscovery/cloudlist for the keys.
+  - use: cloudlist
+    providers:
+      - provider: gcp
+        id: gcp-org
+        organization_id: ${GCP_ORGANIZATION_ID}
+        gcp_service_account_key: ${GCP_SERVICE_ACCOUNT_KEY}
+      # - provider: aws
+      #   id: aws-prod
+      #   aws_access_key: ${AWS_ACCESS_KEY_ID}
+      #   aws_secret_key: ${AWS_SECRET_ACCESS_KEY}
+
+  # Asset types cloudlist does not cover, searched org-wide. Any public IP in
+  # the resource is picked up.
+  - use: gcp_asset_search
+    organization_id: ${GCP_ORGANIZATION_ID}
+    service_account_key: ${GCP_SERVICE_ACCOUNT_KEY}
+    asset_types:
+      - sqladmin.googleapis.com/Instance
+
+  - use: dns
+    root_domains:
+      - example.com
+    max_enumeration_minutes: 10
+
+  - use: static_list
+    targets: []
+
+scanners: # run in order, each builds on the previous output
+  - use: naabu
+    top_ports: "1000"
+    extra_ports: "8080,8443"
+    rate: 300 # packets/s, keep low to not trip Cloud Armor or rate limits
+  - use: httpx
+    rate_limit: 50
+  - use: nuclei
+    severities: [medium, high, critical]
+    rate_limit: 50
+    concurrency: 10
+  - use: cve_lookup
+    min_severity: medium
+    api_key: ${NVD_API_KEY} # optional; https://nvd.nist.gov/developers/request-an-api-key
+
+# Never scanned, even if discovered. IPs, CIDRs or hostnames.
+exclude: []
