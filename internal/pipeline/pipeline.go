@@ -1,4 +1,4 @@
-// Package pipeline runs one scan: discover → scan → diff → store.
+// Package pipeline runs one scan: discover → scan → verify → diff → store.
 package pipeline
 
 import (
@@ -52,14 +52,19 @@ func (p *Pipeline) Run(ctx context.Context) error {
 	log := slog.With("run", id)
 	start := time.Now()
 
-	snap, err := p.scan(ctx, log)
+	prev, err := p.store.LastSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	snap, names, err := p.scan(ctx, log)
 	if err != nil {
 		log.Error("run failed", "err", err)
 		return errors.Join(err, p.store.FailRun(context.WithoutCancel(ctx), id, err))
 	}
-	prev, err := p.store.LastSnapshot(ctx)
-	if err != nil {
-		return err
+	if restored, findings := stillOpen(ctx, prev, snap.Endpoints, names); len(restored) > 0 {
+		log.Warn("endpoints missed by the scan still accept connections, keeping them", "count", len(restored))
+		snap.Endpoints = append(snap.Endpoints, restored...)
+		snap.Findings = append(snap.Findings, findings...)
 	}
 	events := diff.Compute(prev, snap)
 	if err := p.store.FinishRun(ctx, id, snap, events); err != nil {
@@ -70,7 +75,8 @@ func (p *Pipeline) Run(ctx context.Context) error {
 	return nil
 }
 
-func (p *Pipeline) scan(ctx context.Context, log *slog.Logger) (model.Snapshot, error) {
+// scan returns the snapshot and the scanned names per IP.
+func (p *Pipeline) scan(ctx context.Context, log *slog.Logger) (model.Snapshot, map[string][]string, error) {
 	var snap model.Snapshot
 
 	results := make([][]model.Asset, len(p.discoverers))
@@ -91,7 +97,7 @@ func (p *Pipeline) scan(ctx context.Context, log *slog.Logger) (model.Snapshot, 
 		})
 	}
 	if err := g.Wait(); err != nil {
-		return snap, err
+		return snap, nil, err
 	}
 	snap.Assets = slices.Concat(results...)
 
@@ -100,12 +106,12 @@ func (p *Pipeline) scan(ctx context.Context, log *slog.Logger) (model.Snapshot, 
 	log.Info("scanning", "ips", len(sc.Targets))
 	for _, s := range p.scanners {
 		if err := s.Scan(ctx, sc); err != nil {
-			return snap, fmt.Errorf("scanner %s: %w", s.Name(), err)
+			return snap, nil, fmt.Errorf("scanner %s: %w", s.Name(), err)
 		}
 		log.Info("scanned", "module", s.Name(), "endpoints", len(sc.Endpoints), "findings", len(sc.Findings))
 	}
 	snap.Endpoints, snap.Findings = sc.Endpoints, sc.Findings
-	return snap, nil
+	return snap, sc.Names, nil
 }
 
 // targets returns the unique scan targets, minus excluded IPs, CIDRs and hostnames.

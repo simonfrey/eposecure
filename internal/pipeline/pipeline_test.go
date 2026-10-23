@@ -3,7 +3,9 @@ package pipeline
 import (
 	"context"
 	"log/slog"
+	"net"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/simonfrey/exposure-scanner/internal/model"
@@ -43,5 +45,56 @@ func TestResolveScansEachIPOnce(t *testing.T) {
 	}
 	if got := names["127.0.0.1"]; !slices.Equal(got, []string{"127.0.0.1", "localhost"}) {
 		t.Fatalf("names = %v", got)
+	}
+}
+
+func TestStillOpen(t *testing.T) {
+	var lc net.ListenConfig
+	l, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Close() }()
+	openPort := l.Addr().(*net.TCPAddr).Port
+	closed, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedPort := closed.Addr().(*net.TCPAddr).Port
+	_ = closed.Close()
+
+	prev := model.Snapshot{
+		Endpoints: []model.Endpoint{
+			{Host: "127.0.0.1", Port: openPort},   // missed by the scan, still open
+			{Host: "127.0.0.1", Port: closedPort}, // really closed
+			{Host: "localhost", Port: 1},          // found again
+			{Host: "gone.example.com", Port: 443}, // left the inventory, not re-checked
+		},
+		Findings: []model.Finding{
+			{TemplateID: "a", MatchedAt: "http://127.0.0.1:" + strconv.Itoa(openPort) + "/x"},
+			{TemplateID: "b", MatchedAt: "127.0.0.1:" + strconv.Itoa(closedPort)},
+		},
+	}
+	cur := []model.Endpoint{{Host: "localhost", Port: 1}}
+	names := map[string][]string{"127.0.0.1": {"127.0.0.1", "localhost"}}
+	eps, findings := stillOpen(context.Background(), prev, cur, names)
+	if len(eps) != 1 || eps[0].Port != openPort || eps[0].Scanner != "verify" {
+		t.Fatalf("endpoints = %+v", eps)
+	}
+	if len(findings) != 1 || findings[0].TemplateID != "a" {
+		t.Fatalf("findings = %+v", findings)
+	}
+}
+
+func TestAddrOf(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://a.example.com/x?y=1": "a.example.com:443",
+		"http://1.2.3.4:8080":         "1.2.3.4:8080",
+		"1.2.3.4:22":                  "1.2.3.4:22",
+		"a.example.com:6379":          "a.example.com:6379",
+	} {
+		if got := addrOf(in); got != want {
+			t.Errorf("addrOf(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
