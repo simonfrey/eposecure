@@ -204,9 +204,72 @@ groups:
                 FROM v_latest_events
                 WHERE type = 'new_finding'
                   AND severity IN ('info', 'low')
-                  AND detail->'tags' ?| array['panel', 'exposure', 'misconfig', 'default-login', 'takeover']
+                  AND detail->'tags' ?| array['panel', 'exposure', 'misconfig', 'default-login', 'takeover', 'ssl']
                   AND NOT accepted
                   AND finished_at > now() - interval '20 minutes'
+          - *threshold
+
+      - uid: risk-changed
+        title: Finding risk increased
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: critical }
+        annotations:
+          title: Known finding became more dangerous
+          summary: '{{ $labels.template_id }} at {{ $labels.matched_at }}{{ with $labels.account }} ({{ . }}){{ end }}: {{ $labels.change }}'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: exposure-pg
+            model:
+              refId: A
+              format: table
+              rawQuery: true
+              editorMode: code
+              rawSql: |
+                -- only increases that matter: now exploited, or raised to high/critical
+                SELECT target, account,
+                       detail->>'template_id' AS template_id,
+                       detail->>'matched_at' AS matched_at,
+                       CASE WHEN detail->>'new_exploited' = 'true' AND detail->>'old_exploited' = 'false'
+                            THEN 'now actively exploited (CISA KEV)'
+                            ELSE 'severity ' || (detail->>'old_severity') || ' -> ' || (detail->>'new_severity')
+                       END AS change,
+                       1 AS value
+                FROM v_latest_events
+                WHERE type = 'risk_changed'
+                  AND (detail->>'new_exploited' = 'true' AND detail->>'old_exploited' = 'false'
+                       OR detail->>'new_severity' IN ('high', 'critical')
+                          AND detail->>'old_severity' NOT IN ('high', 'critical'))
+                  AND NOT accepted
+                  AND finished_at > now() - interval '20 minutes'
+          - *threshold
+
+      - uid: new-assets
+        title: New assets
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: info }
+        annotations:
+          title: New public assets discovered
+          summary: '{{ $labels.target }} {{ $labels.provider }} {{ $labels.account }} {{ $labels.resource }} ({{ $labels.kind }})'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: exposure-pg
+            model:
+              refId: A
+              format: table
+              rawQuery: true
+              editorMode: code
+              rawSql: |
+                SELECT target, provider, account, resource, detail->>'kind' AS kind, 1 AS value
+                FROM v_latest_events
+                WHERE type = 'new_asset' AND finished_at > now() - interval '20 minutes'
           - *threshold
 
       - uid: findings-overdue

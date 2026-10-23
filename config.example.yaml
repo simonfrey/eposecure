@@ -24,13 +24,18 @@ discovery: # all run in parallel; if one fails the run fails and nothing is diff
     organization_id: ${GCP_ORGANIZATION_ID}
     service_account_key: ${GCP_SERVICE_ACCOUNT_KEY}
 
+  # Subdomains from passive sources (incl. certificate transparency) that
+  # resolve. Names that no longer resolve but still have a CNAME are kept as
+  # takeover candidates for nuclei's takeover templates.
   - use: dns
     root_domains:
       - example.com
     max_enumeration_minutes: 10
 
+  # Fixed IPs, CIDRs or hostnames, e.g. networks no cloud API lists.
+  # A CIDR larger than max_ips (default 4096) is refused.
   - use: static_list
-    targets: []
+    targets: [] # e.g. ["203.0.113.0/28", "vpn.example.com"]
 
 scanners: # run in order, each builds on the previous output
   - use: naabu
@@ -39,22 +44,34 @@ scanners: # run in order, each builds on the previous output
     # top 1000 (Redis, MongoDB, Kubernetes, Docker, Elasticsearch, ...).
     # extra_ports: "6379,27017,9000-9100"
     rate: 300 # packets/s, keep low to not trip Cloud Armor or rate limits
+  # UDP services that answer a protocol request. Also reports open DNS
+  # resolvers, SNMP "public", SSDP and TFTP as findings. Supported ports:
+  # 53, 69, 123, 161, 1900.
+  # - use: udp
+  #   ports: [53, 69, 123, 161, 1900]
   - use: httpx
     rate_limit: 50
+    follow_host_redirects: true # same-host redirects only; other hosts' pages are not ours
+  - use: banner # service and version on non-HTTP ports (ssh, redis, mysql, ...)
   - use: nuclei # vulnerabilities
     severities: [medium, high, critical]
     exclude_tags: [dos, fuzz, intrusive]
     rate_limit: 50
     concurrency: 10
-  - use: nuclei # exposures: admin panels, leaked files, default logins, at any severity
+  - use: nuclei # exposures: admin panels, leaked files, default logins, TLS, takeovers, at any severity
     severities: [info, low, medium, high, critical]
-    tags: [panel, exposure, misconfig, default-login, takeover]
+    tags: [panel, exposure, misconfig, default-login, takeover, ssl]
     exclude_tags: [dos, fuzz, intrusive, headers] # missing security headers are noise here
+    # Informational TLS templates that match nearly every host. Mismatched
+    # certificates are expected when scanning by IP.
+    exclude_ids: [ssl-issuer, ssl-dns-names, tls-version, wildcard-tls, mismatched-ssl-certificate]
+    takeover_candidates: true # also check dangling CNAMEs found by dns
     rate_limit: 50
     concurrency: 10
   - use: cve_lookup
     min_severity: medium
     api_key: ${NVD_API_KEY} # optional; https://nvd.nist.gov/developers/request-an-api-key
+    cache_ttl_hours: 20 # reuse NVD answers this long; older ones are still used if NVD is down
   - use: exploit_intel # last: marks CVEs exploited in the wild (CISA KEV) and adds EPSS
 
 # Never scanned, even if discovered. IPs, CIDRs or hostnames.

@@ -8,7 +8,7 @@ to Postgres. Grafana shows the dashboard and sends Slack alerts.
 
 ```
 cloudlist (gcp, aws, …) ─┐
-gcp_asset_search        ─┼─→ assets → IPs ─→ naabu → httpx → nuclei → cve_lookup → exploit_intel
+gcp_asset_search        ─┼─→ assets → IPs ─→ naabu → udp → httpx → banner → nuclei → cve_lookup → exploit_intel
 dns (subfinder + dnsx)  ─┤                                   │
 static_list             ─┘                                   ▼
                                        Postgres (runs, assets, endpoints, findings, events + views)
@@ -38,19 +38,23 @@ To trigger a run by hand: `docker compose run --rm scanner run-once`.
    each IP is port-scanned once. Every open port is then reported per hostname behind that IP, so
    HTTP probes and nuclei reach services routed by name (SNI, Host header). An IP that is only
    reached through a hostname, like a shared CDN or Cloud Run frontend, is never probed by IP.
+   Hostnames that no longer resolve but still have a CNAME are not port-scanned. They go to
+   nuclei's takeover templates instead.
 3. Scanners run in config order, each building on the previous one: naabu finds open ports
-   (TCP connect, no root), httpx adds HTTP status, title, technologies and versioned CPEs,
+   (TCP connect, no root), udp finds a few UDP services, httpx adds HTTP status, title,
+   technologies and versioned CPEs, banner identifies non-HTTP services (SSH, Redis, MySQL, …),
    nuclei adds template findings, cve_lookup adds known CVEs per CPE from the [NVD API], and
    exploit_intel marks CVEs listed in [CISA KEV] and adds their [EPSS] score.
-4. Ports open last run but missing now get a direct TCP re-check. If they still accept
+4. TCP ports open last run but missing now get a direct re-check. If they still accept
    connections they are kept, with their previous findings, so one dropped packet does not cause
-   a "closed" alert followed by a "new" one.
+   a "closed" alert followed by a "new" one. UDP ports have no such check.
 5. Drift guard: if a discovery module suddenly returns nothing, or open endpoints drop by more
    than `max_endpoint_drop_pct` (default 50), the run fails instead of reporting mass closures.
    That is usually expired credentials or network trouble. If the drop is real, store it once with
    `docker compose run --rm scanner run-once --accept-drift`.
 6. The result is compared with the previous successful run, which produces events
-   (`new_endpoint`, `closed_endpoint`, `new_finding`, `resolved_finding`, `new_asset`, `removed_asset`).
+   (`new_endpoint`, `closed_endpoint`, `new_finding`, `resolved_finding`, `new_asset`, `removed_asset`,
+   and `risk_changed` when a known finding changes severity, becomes exploited or its EPSS moves by 0.1).
 7. Everything is stored in one transaction.
 
 Only one run executes at a time (Postgres advisory lock), so a manual `run-once` next to `serve`
@@ -72,9 +76,10 @@ Postgres database `exposure`. Raw per-run tables: `runs`, `assets`, `endpoints`,
 | `v_latest_run` | latest successful run |
 | `v_run_stats` | counts per run (assets, endpoints, findings by severity) |
 | `v_run_deltas` | per run: change vs previous run, `progress_pct` vs baseline |
-| `v_current_endpoints` / `v_current_findings` | latest state, joined with provider/account/resource, `first_seen` and `age_days`; findings also carry `exploited`, `epss`, `tags`, `accepted` |
+| `v_current_endpoints` / `v_current_findings` | latest state, joined with provider/account/resource, `first_seen` and `age_days`; endpoints carry `protocol` and `service`; findings also carry `exploited`, `epss`, `tags`, `accepted` |
 | `v_events` / `v_latest_events` | changes between runs |
 | `accepted` (table) | findings accepted by hand, see Triage |
+| `cve_cache` (table) | NVD answers per CPE, reused for `cache_ttl_hours` |
 
 Baseline: the first successful run, or `BASELINE_RUN_ID` from `.env`.
 
@@ -90,8 +95,10 @@ docker compose exec postgres psql -U exposure -c 'SELECT * FROM v_run_deltas ORD
 | New public endpoints | a host:port that was not open in the previous run |
 | Closed public endpoints | a host:port that is no longer open |
 | Actively exploited vulnerabilities | a new finding whose CVE is in CISA KEV |
+| Finding risk increased | a known finding is now in CISA KEV, or was raised to high/critical |
+| New assets | discovery found a resource that was not there in the previous run |
 | New findings | a new medium/high/critical nuclei or CVE finding (not exploited) |
-| New exposures | a new info/low finding tagged panel, exposure, misconfig, default-login or takeover |
+| New exposures | a new info/low finding tagged panel, exposure, misconfig, default-login, takeover or ssl |
 | Findings overdue | weekly: exploited, critical or high open > 30 days, medium > 90 days |
 | Scan failed or stale | the last run failed (including the drift guard), or no success for 36 h |
 
@@ -112,6 +119,10 @@ The first run reports everything as new. Accepted findings never alert. Rules li
   Patch or restrict access. Fixed findings show up as `resolved_finding` on the next run.
 - **Exposure** (admin panel, leaked `.git` or `.env`, default login): these should almost never be
   public. Restrict access first, then rotate anything the leaked file contained.
+- **Takeover** (dangling CNAME): the name points at a cloud resource that no longer exists, so
+  anyone may be able to claim it and serve content under your domain. Delete the DNS record.
+- **UDP findings** (open DNS resolver, SNMP `public`, SSDP, TFTP): these services should not answer
+  the internet. They leak information and can be abused for amplification attacks. Firewall them.
 - **Accept a finding** that is a false positive or a known risk. It stays on the dashboard (toggle
   *Show accepted*) but stops alerting. Leave `until` empty to accept it forever:
   ```sh
@@ -119,7 +130,7 @@ The first run reports everything as new. Accepted findings never alert. Rules li
     ('CVE-2021-23017', 'https://www.example.com', 'resolver not used', '2027-01-31')"
   ```
 - **Scan failed**: `docker compose logs scanner`, or `SELECT id, error FROM runs ORDER BY id DESC LIMIT 5`.
-  Common causes are expired credentials, API quota, or the NVD API being down (retried 3 times).
+  Common causes are expired credentials, API quota, or the NVD API being down (retried 3 times; CPEs seen before fall back to the cache).
   A drift guard error names the module or the drop. Fix the cause, or run once with
   `--accept-drift` if the change is real.
 
@@ -133,15 +144,17 @@ for all options.
 |---|---|
 | `cloudlist` | any [cloudlist] provider; the `providers` blocks are passed through unchanged |
 | `gcp_asset_search` | Cloud Asset Inventory search across the org for every public IP and Cloud Run / Functions / App Engine URL; `asset_types` to narrow |
-| `dns` | subfinder passive subdomain enumeration for `root_domains`; keeps names that resolve |
-| `static_list` | fixed `targets` |
+| `dns` | subfinder passive subdomain enumeration (incl. certificate transparency) for `root_domains`; keeps names that resolve, and names with a dangling CNAME as takeover candidates |
+| `static_list` | fixed `targets`: IPs, CIDRs (up to `max_ips`, default 4096) or hostnames |
 
 | Scanner | |
 |---|---|
 | `naabu` | port scan, `top_ports` plus `extra_ports` (default: cloud service ports outside the top 1000), `rate` |
-| `httpx` | HTTP probe, tech detection |
-| `nuclei` | templates by `severities`, `tags`, `exclude_tags` (default `dos`, `fuzz`, `intrusive`), `rate_limit`, `concurrency`; templates auto-update into the `scanner-home` volume. Use it twice: once for vulnerabilities, once for exposures at any severity (see `config.example.yaml`) |
-| `cve_lookup` | NVD CVEs for detected versions, `min_severity`, optional `api_key` (10× faster) |
+| `udp` | DNS, TFTP, NTP, SNMP and SSDP on the listed `ports` (off when empty); only replies count as open |
+| `httpx` | HTTP probe, tech detection; `follow_host_redirects` (default on) follows redirects on the same host only |
+| `banner` | service on non-HTTP ports; versioned CPEs only for exact upstream versions (distro builds with backports are skipped) |
+| `nuclei` | templates by `severities`, `tags`, `exclude_tags` (default `dos`, `fuzz`, `intrusive`), `exclude_ids`, `rate_limit`, `concurrency`; `takeover_candidates` adds dangling CNAMEs as targets; templates auto-update into the `scanner-home` volume. Use it twice: once for vulnerabilities, once for exposures at any severity (see `config.example.yaml`) |
+| `cve_lookup` | NVD CVEs for detected versions, `min_severity`, optional `api_key` (10× faster), `cache_ttl_hours` (default 20; stale entries are used if NVD is down) |
 | `exploit_intel` | marks CVE findings in [CISA KEV] and adds [EPSS]; put it last |
 
 Rates default to conservative values so they don't trip Cloud Armor or production rate limits.
