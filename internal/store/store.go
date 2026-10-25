@@ -7,6 +7,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -83,52 +84,71 @@ func (s *Store) StartRun(ctx context.Context) (id int64, release func(), err err
 	return id, release, nil
 }
 
-// FailRun marks a run as failed. Its partial data is not stored.
-func (s *Store) FailRun(ctx context.Context, id int64, runErr error) error {
-	_, err := s.db.Exec(ctx, `UPDATE runs SET status = 'failed', finished_at = now(), error = $2 WHERE id = $1`,
-		id, runErr.Error())
-	return err
+// FailRun marks a run as failed and keeps what it gathered for inspection.
+// LastSnapshot and the views only read successful runs, so the partial data
+// never becomes current state or feeds a diff. A failed run has no events.
+func (s *Store) FailRun(ctx context.Context, id int64, runErr error, snap model.Snapshot) error {
+	const fail = `UPDATE runs SET status = 'failed', finished_at = now(), error = $2 WHERE id = $1`
+	err := pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
+		if err := insertSnapshot(ctx, tx, id, snap, nil); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, fail, id, runErr.Error())
+		return err
+	})
+	if err != nil { // the partial data is lost, but the run must still show as failed
+		_, uerr := s.db.Exec(ctx, fail, id, runErr.Error())
+		return errors.Join(fmt.Errorf("storing partial data: %w", err), uerr)
+	}
+	return nil
 }
 
 // FinishRun stores the snapshot and events and marks the run successful, atomically.
 func (s *Store) FinishRun(ctx context.Context, id int64, snap model.Snapshot, events []model.Event) error {
 	return pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
-		inserts := []struct {
-			table string
-			cols  []string
-			rows  [][]any
-		}{
-			{"assets", []string{"run_id", "provider", "account", "kind", "name", "target", "source"},
-				rows(snap.Assets, func(a model.Asset) []any {
-					return []any{id, a.Provider, a.Account, a.Kind, a.Name, a.Target, a.Source}
-				})},
-			{"endpoints", []string{"run_id", "host", "ip", "port", "url", "http_status", "title", "tech", "cpe", "scanner", "service", "protocol"},
-				rows(snap.Endpoints, func(e model.Endpoint) []any {
-					proto := e.Protocol
-					if proto == "" {
-						proto = "tcp"
-					}
-					return []any{id, e.Host, e.IP, e.Port, e.URL, e.HTTPStatus, e.Title, e.Tech, e.CPE, e.Scanner, e.Service, proto}
-				})},
-			{"findings", []string{"run_id", "template_id", "name", "severity", "matched_at", "target", "scanner",
-				"tags", "exploited", "epss", "raw"},
-				rows(snap.Findings, func(f model.Finding) []any {
-					return []any{id, f.TemplateID, f.Name, f.Severity, f.MatchedAt, f.Target, f.Scanner,
-						f.Tags, f.Exploited, f.EPSS, jsonb(f.Raw)}
-				})},
-			{"events", []string{"run_id", "type", "target", "port", "severity", "provider", "account", "resource", "detail"},
-				rows(events, func(e model.Event) []any {
-					return []any{id, e.Type, e.Target, nullIfZero(e.Port), e.Severity, e.Provider, e.Account, e.Resource, jsonb(e.Detail)}
-				})},
-		}
-		for _, in := range inserts {
-			if _, err := tx.CopyFrom(ctx, pgx.Identifier{in.table}, in.cols, pgx.CopyFromRows(in.rows)); err != nil {
-				return err
-			}
+		if err := insertSnapshot(ctx, tx, id, snap, events); err != nil {
+			return err
 		}
 		_, err := tx.Exec(ctx, `UPDATE runs SET status = 'success', finished_at = now() WHERE id = $1`, id)
 		return err
 	})
+}
+
+func insertSnapshot(ctx context.Context, tx pgx.Tx, id int64, snap model.Snapshot, events []model.Event) error {
+	inserts := []struct {
+		table string
+		cols  []string
+		rows  [][]any
+	}{
+		{"assets", []string{"run_id", "provider", "account", "kind", "name", "target", "source"},
+			rows(snap.Assets, func(a model.Asset) []any {
+				return []any{id, a.Provider, a.Account, a.Kind, a.Name, a.Target, a.Source}
+			})},
+		{"endpoints", []string{"run_id", "host", "ip", "port", "url", "http_status", "title", "tech", "cpe", "scanner", "service", "protocol"},
+			rows(snap.Endpoints, func(e model.Endpoint) []any {
+				proto := e.Protocol
+				if proto == "" {
+					proto = "tcp"
+				}
+				return []any{id, e.Host, e.IP, e.Port, e.URL, e.HTTPStatus, e.Title, e.Tech, e.CPE, e.Scanner, e.Service, proto}
+			})},
+		{"findings", []string{"run_id", "template_id", "name", "severity", "matched_at", "target", "scanner",
+			"tags", "exploited", "epss", "raw"},
+			rows(snap.Findings, func(f model.Finding) []any {
+				return []any{id, f.TemplateID, f.Name, f.Severity, f.MatchedAt, f.Target, f.Scanner,
+					f.Tags, f.Exploited, f.EPSS, jsonb(f.Raw)}
+			})},
+		{"events", []string{"run_id", "type", "target", "port", "severity", "provider", "account", "resource", "detail"},
+			rows(events, func(e model.Event) []any {
+				return []any{id, e.Type, e.Target, nullIfZero(e.Port), e.Severity, e.Provider, e.Account, e.Resource, jsonb(e.Detail)}
+			})},
+	}
+	for _, in := range inserts {
+		if _, err := tx.CopyFrom(ctx, pgx.Identifier{in.table}, in.cols, pgx.CopyFromRows(in.rows)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // LastSnapshot loads the most recent successful run. Returns an empty

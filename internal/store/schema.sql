@@ -160,8 +160,9 @@ LEFT JOIN LATERAL (
     WHERE run_id = f.run_id AND target = f.target LIMIT 1
 ) a ON true;
 
--- Events with the time of their run. Finding events carry accepted, so
--- alert rules can skip them.
+-- Events with the time of their run. Finding events carry accepted, so alert
+-- rules can skip them. Not filtered on status: only successful runs have
+-- events (failed runs keep partial data but are never diffed).
 CREATE VIEW v_events AS
 SELECT r.finished_at, ev.*,
        EXISTS (SELECT 1 FROM accepted acc

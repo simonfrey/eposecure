@@ -56,6 +56,7 @@ func New(cfg *config.Config, st *store.Store) (*Pipeline, error) {
 
 // Run executes one full run and records it. A failing module fails the
 // whole run and skips the diff: a partial inventory would look like closed ports.
+// What was gathered until then is still stored under the failed run.
 func (p *Pipeline) Run(ctx context.Context, opts RunOptions) error {
 	id, release, err := p.store.StartRun(ctx)
 	if err != nil {
@@ -71,7 +72,7 @@ func (p *Pipeline) Run(ctx context.Context, opts RunOptions) error {
 	}
 	if err != nil {
 		log.Error("run failed", "err", err)
-		return errors.Join(err, p.store.FailRun(context.WithoutCancel(ctx), id, err))
+		return errors.Join(err, p.store.FailRun(context.WithoutCancel(ctx), id, err, snap))
 	}
 	log.Info("run finished", "took", time.Since(start).Round(time.Second), "assets", len(snap.Assets),
 		"endpoints", len(snap.Endpoints), "findings", len(snap.Findings), "events", len(events))
@@ -121,10 +122,11 @@ func (p *Pipeline) scan(ctx context.Context, log *slog.Logger) (model.Snapshot, 
 			return nil
 		})
 	}
-	if err := g.Wait(); err != nil {
+	err := g.Wait()
+	snap.Assets = slices.Concat(results...) // on error: what the other sources found
+	if err != nil {
 		return snap, nil, err
 	}
-	snap.Assets = slices.Concat(results...)
 
 	scan, takeover := splitTakeover(snap.Assets)
 	sc := &model.ScanContext{TakeoverCandidates: targets(takeover, p.exclude)}
@@ -132,6 +134,7 @@ func (p *Pipeline) scan(ctx context.Context, log *slog.Logger) (model.Snapshot, 
 	log.Info("scanning", "ips", len(sc.Targets), "takeover_candidates", len(sc.TakeoverCandidates))
 	for _, s := range p.scanners {
 		if err := s.Scan(ctx, sc); err != nil {
+			snap.Endpoints, snap.Findings = sc.Endpoints, unique(sc.Findings)
 			return snap, nil, fmt.Errorf("scanner %s: %w", s.Name(), err)
 		}
 		log.Info("scanned", "module", s.Name(), "endpoints", len(sc.Endpoints), "findings", len(sc.Findings))

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"slices"
@@ -132,6 +133,42 @@ func TestCheckDrift(t *testing.T) {
 	}
 	if err := p.checkDrift(model.Snapshot{}, model.Snapshot{}); err != nil {
 		t.Errorf("first run: %v", err)
+	}
+}
+
+type fakeDiscoverer []model.Asset
+
+func (fakeDiscoverer) Name() string                                      { return "fake" }
+func (f fakeDiscoverer) Discover(context.Context) ([]model.Asset, error) { return f, nil }
+
+type fakeScanner struct {
+	add model.Endpoint
+	err error
+}
+
+func (fakeScanner) Name() string { return "fake" }
+func (f fakeScanner) Scan(_ context.Context, sc *model.ScanContext) error {
+	if f.err != nil {
+		return f.err
+	}
+	sc.Endpoints = append(sc.Endpoints, f.add)
+	return nil
+}
+
+func TestScanKeepsPartialResultsOnError(t *testing.T) {
+	p := &Pipeline{
+		discoverers: []registry.Discoverer{fakeDiscoverer{{Target: "192.0.2.1"}}},
+		scanners: []registry.Scanner{
+			fakeScanner{add: model.Endpoint{Host: "192.0.2.1", Port: 22}},
+			fakeScanner{err: errors.New("boom")},
+		},
+	}
+	snap, _, err := p.scan(t.Context(), slog.Default())
+	if err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(snap.Assets) != 1 || len(snap.Endpoints) != 1 {
+		t.Fatalf("partial results lost: %+v", snap)
 	}
 }
 

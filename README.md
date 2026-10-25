@@ -61,8 +61,10 @@ Only one run executes at a time (Postgres advisory lock), so a manual `run-once`
 is safe: it is refused while a scan is running. A run killed mid-way (restart, crash) is marked
 `failed` with error `interrupted` when the next run starts.
 
-If any module fails, the whole run is marked `failed`, nothing is stored and no diff happens. A
-partial inventory would otherwise show up as falsely "closed" endpoints. The failure triggers the
+If any module fails, the whole run is marked `failed` and no diff happens. A partial inventory
+would otherwise show up as falsely "closed" endpoints. What the run gathered until then is still
+stored under its `run_id` for inspection (e.g. `SELECT * FROM endpoints WHERE run_id = <id>`), but
+views, dashboard and alerts only ever read successful runs. The failure triggers the
 `scan-stale-or-failed` alert. A run that takes longer than `RUN_TIMEOUT_HOURS` (default 6) is
 aborted and fails the same way.
 
@@ -131,7 +133,8 @@ The first run reports everything as new. Accepted findings never alert. Rules li
   ```
 - **Scan failed**: `docker compose logs scanner`, or `SELECT id, error FROM runs ORDER BY id DESC LIMIT 5`.
   Common causes are expired credentials, API quota, or the NVD API being down (retried 3 times; CPEs seen before fall back to the cache).
-  A drift guard error names the module or the drop. Fix the cause, or run once with
+  A drift guard error names the module or the drop. The rejected run's data is stored, so you can
+  compare it with the last successful run. Fix the cause, or run once with
   `--accept-drift` if the change is real.
 
 ## Configuration
