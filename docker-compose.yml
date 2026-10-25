@@ -17,7 +17,7 @@ services:
         condition: service_healthy
 
   postgres:
-    image: postgres:16.15
+    image: postgres:16.15@sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97
     restart: unless-stopped
     environment:
       POSTGRES_DB: exposure
@@ -33,7 +33,7 @@ services:
       retries: 10
 
   grafana:
-    image: grafana/grafana-oss:12.4.3
+    image: grafana/grafana-oss:12.4.3@sha256:2e986801428cd689c2358605289c90ab37d2b39e24808874971f54c99bcdc412
     restart: unless-stopped
     ports:
       - "3000:3000"
