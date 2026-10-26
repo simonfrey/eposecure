@@ -1,7 +1,7 @@
 services:
   scanner:
     build: .
-    image: ghcr.io/simonfrey/exposure-scanner:dev
+    image: ghcr.io/simonfrey/eposecure:dev
     restart: unless-stopped
     # .env is passed through whole so config.yaml can reference any ${VAR},
     # e.g. AWS keys for a new cloudlist provider, without touching this file.

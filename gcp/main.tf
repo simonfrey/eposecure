@@ -2,7 +2,7 @@
 # admin (needs roles/resourcemanager.organizationAdmin), not from CI.
 #
 #   terraform init && terraform apply -var org_id=... -var project_id=...
-#   gcloud secrets versions access latest --secret exposure-scanner-key | jq -c .
+#   gcloud secrets versions access latest --secret eposecure-key | jq -c .
 #
 # Rotate: terraform apply -replace=google_service_account_key.scanner, then
 # update GCP_SERVICE_ACCOUNT_KEY in .env and restart the scanner.
@@ -38,7 +38,7 @@ resource "google_project_service" "cloudasset" {
 }
 
 resource "google_service_account" "scanner" {
-  account_id   = "exposure-scanner"
+  account_id   = "eposecure"
   display_name = "External exposure scanner (read-only inventory)"
 }
 
@@ -60,7 +60,7 @@ resource "google_service_account_key" "scanner" {
 }
 
 resource "google_secret_manager_secret" "key" {
-  secret_id = "exposure-scanner-key"
+  secret_id = "eposecure-key"
   replication {
     auto {}
   }

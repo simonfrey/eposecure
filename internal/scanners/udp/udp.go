@@ -212,7 +212,7 @@ func ssdpCheck(reply []byte) (bool, *finding) {
 
 // tftpRequest asks to read a file that does not exist.
 func tftpRequest() []byte {
-	return append([]byte{0x00, 0x01}, "exposure-scanner-probe\x00octet\x00"...)
+	return append([]byte{0x00, 0x01}, "eposecure-probe\x00octet\x00"...)
 }
 
 func tftpCheck(reply []byte) (bool, *finding) {

@@ -221,7 +221,7 @@ admin applies it by hand. The Terraform state contains the key, so keep it somew
 
 ```sh
 cd gcp && terraform init && terraform apply -var org_id=… -var project_id=…
-gcloud secrets versions access latest --secret exposure-scanner-key | jq -c .
+gcloud secrets versions access latest --secret eposecure-key | jq -c .
 # put the output in .env as GCP_SERVICE_ACCOUNT_KEY='…' (single quotes)
 ```
 
