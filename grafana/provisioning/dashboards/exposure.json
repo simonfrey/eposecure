@@ -84,6 +84,21 @@
         ],
         "multi": false,
         "includeAll": false
+      },
+      {
+        "name": "scan_phase",
+        "label": "Run phase",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "exposure-pg"
+        },
+        "query": "SELECT phase FROM v_scan_phases ORDER BY CASE state WHEN 'running' THEN 0 ELSE 1 END, ord",
+        "definition": "SELECT phase FROM v_scan_phases ORDER BY CASE state WHEN 'running' THEN 0 ELSE 1 END, ord",
+        "refresh": 2,
+        "multi": false,
+        "includeAll": false,
+        "sort": 0
       }
     ]
   },
@@ -871,6 +886,447 @@
           }
         ]
       }
+    },
+    {
+      "id": 19,
+      "type": "row",
+      "title": "Current run",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 53,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "id": 20,
+          "type": "gauge",
+          "title": "Run progress",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "exposure-pg"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 54,
+            "w": 4,
+            "h": 6
+          },
+          "description": "Overall progress of the latest run. Phases are weighted by how long they took in the previous successful run.",
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "exposure-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "editorMode": "code",
+              "rawSql": "SELECT overall_pct AS \"Done\" FROM v_scan_status"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "min": 0,
+              "max": 100,
+              "decimals": 1,
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "blue"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "showThresholdMarkers": false
+          }
+        },
+        {
+          "id": 21,
+          "type": "stat",
+          "title": "Latest run",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "exposure-pg"
+          },
+          "gridPos": {
+            "x": 4,
+            "y": 54,
+            "w": 8,
+            "h": 6
+          },
+          "description": "Remaining is empty on the first run (no phase durations to compare yet). Stale means no update for 5 minutes while running: the scanner probably died.",
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "exposure-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "editorMode": "code",
+              "rawSql": "SELECT run_id AS \"Run\", CASE WHEN stale THEN 'stale' ELSE status END AS \"Status\", coalesce(phase, '-') AS \"Phase\", extract(epoch FROM elapsed) AS \"Elapsed\", extract(epoch FROM remaining) AS \"Remaining\" FROM v_scan_status"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "text"
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "Elapsed|Remaining"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "s"
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "/.*/",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "value_and_name"
+          }
+        },
+        {
+          "id": 22,
+          "type": "bargauge",
+          "title": "Phases",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "exposure-pg"
+          },
+          "gridPos": {
+            "x": 12,
+            "y": 54,
+            "w": 12,
+            "h": 6
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "exposure-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "editorMode": "code",
+              "rawSql": "SELECT phase, coalesce(pct, CASE state WHEN 'done' THEN 100 ELSE 0 END) AS pct FROM v_scan_phases ORDER BY ord"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "min": 0,
+              "max": 100,
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "blue"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "orientation": "horizontal",
+            "displayMode": "basic",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": true
+            },
+            "showUnfilled": true
+          }
+        },
+        {
+          "id": 23,
+          "type": "table",
+          "title": "Phases in detail",
+          "description": "Units per phase: modules (discovery), names (resolve), IPs (naabu), probes (httpx, banner, udp), templates \u00d7 targets (nuclei), CPEs (cve_lookup).",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "exposure-pg"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 60,
+            "w": 24,
+            "h": 7
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "exposure-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "editorMode": "code",
+              "rawSql": "SELECT phase AS \"Phase\", state AS \"State\", pct AS \"%\", done AS \"Done\", total AS \"Total\", targets_done || '/' || targets AS \"Targets\", date_trunc('second', duration)::text AS \"Took\", date_trunc('second', previous_duration)::text AS \"Previous run\" FROM v_scan_phases ORDER BY ord"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "%"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "percent"
+                  },
+                  {
+                    "id": "min",
+                    "value": 0
+                  },
+                  {
+                    "id": "max",
+                    "value": 100
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "gauge",
+                      "mode": "basic"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm"
+          }
+        },
+        {
+          "id": 24,
+          "type": "table",
+          "title": "Per domain ($scan_phase)",
+          "description": "Domain is the account of the asset: the DNS root domain, or the cloud project/account.",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "exposure-pg"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 67,
+            "w": 24,
+            "h": 6
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "exposure-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "editorMode": "code",
+              "rawSql": "SELECT domain AS \"Domain\", pct AS \"%\", done AS \"Done\", total AS \"Total\", ips AS \"IPs\", targets_done || '/' || targets AS \"Targets\" FROM v_scan_domains WHERE phase = '$scan_phase' ORDER BY pct, domain"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "%"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "percent"
+                  },
+                  {
+                    "id": "min",
+                    "value": 0
+                  },
+                  {
+                    "id": "max",
+                    "value": 100
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "gauge",
+                      "mode": "basic"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm"
+          }
+        },
+        {
+          "id": 25,
+          "type": "table",
+          "title": "Per IP ($scan_phase)",
+          "description": "Running IPs first.",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "exposure-pg"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 73,
+            "w": 24,
+            "h": 9
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "exposure-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "editorMode": "code",
+              "rawSql": "SELECT ip AS \"IP\", hosts AS \"Hosts\", domain AS \"Domain\", state AS \"State\", pct AS \"%\", done AS \"Done\", total AS \"Total\", targets_done || '/' || targets AS \"Targets\" FROM v_scan_ips WHERE phase = '$scan_phase' ORDER BY CASE state WHEN 'running' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, pct DESC, ip"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "%"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "percent"
+                  },
+                  {
+                    "id": "min",
+                    "value": 0
+                  },
+                  {
+                    "id": "max",
+                    "value": 100
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "gauge",
+                      "mode": "basic"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm"
+          }
+        },
+        {
+          "id": 26,
+          "type": "table",
+          "title": "Per target ($scan_phase)",
+          "description": "What the phase works on: IP (naabu, udp), host:port (httpx, banner), URL or host:port (nuclei), name (resolve).",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "exposure-pg"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 82,
+            "w": 24,
+            "h": 10
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "exposure-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "editorMode": "code",
+              "rawSql": "SELECT target AS \"Target\", ip AS \"IP\", domain AS \"Domain\", state AS \"State\", pct AS \"%\", done AS \"Done\", total AS \"Total\", date_trunc('second', duration)::text AS \"Took\" FROM v_scan_targets WHERE phase = '$scan_phase' ORDER BY CASE state WHEN 'running' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, pct DESC, target"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "%"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "percent"
+                  },
+                  {
+                    "id": "min",
+                    "value": 0
+                  },
+                  {
+                    "id": "max",
+                    "value": 100
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "gauge",
+                      "mode": "basic"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm"
+          }
+        }
+      ]
     }
   ]
 }

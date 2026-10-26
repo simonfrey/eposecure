@@ -67,6 +67,11 @@ func run(ctx context.Context, cmd string, opts pipeline.RunOptions) error {
 	if err != nil {
 		return err
 	}
+	every, err := strconv.Atoi(env("PROGRESS_LOG_SECONDS", "30"))
+	if err != nil || every < 1 {
+		return fmt.Errorf("PROGRESS_LOG_SECONDS must be a positive integer")
+	}
+	opts.ProgressEvery = time.Duration(every) * time.Second
 	// A hung module must not block all future runs; the timed-out run is
 	// recorded as failed and alerts.
 	runOnce := func() error {

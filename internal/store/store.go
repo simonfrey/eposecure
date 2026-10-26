@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/simonfrey/exposure-scanner/internal/model"
+	"github.com/simonfrey/exposure-scanner/internal/progress"
 )
 
 //go:embed schema.sql
@@ -201,6 +202,53 @@ func query[T any](ctx context.Context, db *pgxpool.Pool, sql string, id int64, s
 	return pgx.CollectRows(r, scan)
 }
 
+// SaveProgress writes the run's live progress and the phases and targets
+// that changed since the last call.
+func (s *Store) SaveProgress(ctx context.Context, u progress.Update) error {
+	b := &pgx.Batch{}
+	b.Queue(`UPDATE runs SET phase = $2, overall_pct = $3, eta = $4, updated_at = now() WHERE id = $1`,
+		u.RunID, nullIfEmpty(u.Phase), u.OverallPct, nullTime(u.ETA))
+	for _, p := range u.Phases {
+		b.Queue(`INSERT INTO run_phases (run_id, phase, ord, started_at, finished_at, done, total)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			ON CONFLICT (run_id, phase) DO UPDATE SET ord = excluded.ord, started_at = excluded.started_at,
+				finished_at = excluded.finished_at, done = excluded.done, total = excluded.total`,
+			u.RunID, p.Name, p.Ord, nullTime(p.Started), nullTime(p.Finished), p.Done, p.Total)
+	}
+	for _, t := range u.Targets {
+		b.Queue(`INSERT INTO run_targets (run_id, phase, target, host, ip, domain, done, total, started_at, finished_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			ON CONFLICT (run_id, phase, target) DO UPDATE SET host = excluded.host, ip = excluded.ip,
+				domain = excluded.domain, done = excluded.done, total = excluded.total,
+				started_at = excluded.started_at, finished_at = excluded.finished_at`,
+			u.RunID, t.Phase, t.Target, nullIfEmpty(t.Host), nullIfEmpty(t.IP), nullIfEmpty(t.Domain),
+			t.Done, t.Total, nullTime(t.Started), nullTime(t.Finished))
+	}
+	return pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error { return tx.SendBatch(ctx, b).Close() })
+}
+
+// PhaseDurations returns how long each phase took in the last successful
+// run, to estimate the current one. Empty before the first such run.
+func (s *Store) PhaseDurations(ctx context.Context) (map[string]time.Duration, error) {
+	rows, err := s.db.Query(ctx, `SELECT phase, extract(epoch FROM finished_at - started_at)::float8 FROM run_phases
+		WHERE run_id = (SELECT max(id) FROM runs WHERE status = 'success')
+		  AND started_at IS NOT NULL AND finished_at IS NOT NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]time.Duration{}
+	for rows.Next() {
+		var phase string
+		var secs float64
+		if err := rows.Scan(&phase, &secs); err != nil {
+			return nil, err
+		}
+		out[phase] = time.Duration(secs * float64(time.Second))
+	}
+	return out, rows.Err()
+}
+
 // CVECacheEntry is one CPE's cached NVD answer. Data is the raw JSON of the
 // scanner's own result type, so the store stays scanner-agnostic.
 type CVECacheEntry struct {
@@ -256,6 +304,20 @@ func nullIfZero(n int) any {
 		return nil
 	}
 	return n
+}
+
+func nullTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t
+}
+
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 func jsonb(v any) []byte {

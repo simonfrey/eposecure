@@ -77,6 +77,7 @@ func probeFor(port int) probe {
 }
 
 func (b *Banner) Scan(ctx context.Context, sc *model.ScanContext) error {
+	prog := sc.Progress()
 	var g errgroup.Group
 	g.SetLimit(b.Concurrency)
 	for i := range sc.Endpoints {
@@ -84,8 +85,10 @@ func (b *Banner) Scan(ctx context.Context, sc *model.ScanContext) error {
 		if e.URL != "" || e.Protocol == "udp" {
 			continue // HTTP endpoints are httpx's job, UDP the udp scanner's
 		}
+		prog.Add(e.Addr(), 1)
 		// Each goroutine writes only its own endpoint, so no lock is needed.
 		g.Go(func() error {
+			defer prog.Done(e.Addr(), 1)
 			r := b.probe(ctx, e.Addr(), e.Port)
 			if r.service == "" {
 				return nil

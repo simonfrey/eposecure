@@ -89,6 +89,38 @@ Baseline: the first successful run, or `BASELINE_RUN_ID` from `.env`.
 docker compose exec postgres psql -U exposure -c 'SELECT * FROM v_run_deltas ORDER BY run_id DESC LIMIT 5'
 ```
 
+## Watching a run
+
+A run can take hours. While it goes, the scanner logs a `progress` line every
+`PROGRESS_LOG_SECONDS` (default 30) and writes the same numbers to Postgres every 10 seconds:
+
+```
+progress run=12 overall=41.3% eta=1h12m0s phase=nuclei step=6/7 phase_done=37.0% units=48100/130000 phase_eta=58m10s targets=12/130 ips=2/29 active="https://a.example.com 87/1000, ..."
+target done phase=naabu target=203.0.113.7 ip=203.0.113.7 domain=example.com targets=3/29
+```
+
+A phase is discovery, resolve or one scanner (a scanner configured twice is `nuclei#2`). Each
+phase counts its own units of work per target: names (resolve), IPs (naabu), probes per host:port
+(httpx, banner, udp), templates per URL or host:port (nuclei), CPEs (cve_lookup). `overall`
+weighs each phase by how long it took in the previous successful run, and `eta` is unknown until
+there is one. nuclei targets can stop just short of their total (templates that do not apply to
+that kind of target); the phase end sets them to done.
+
+| View | Zoom level |
+|---|---|
+| `v_scan_status` | latest run: status, current phase, `overall_pct`, `eta`, `remaining`, `stale` (no update for 5 min) |
+| `v_scan_phases` | per phase: done/total, state, duration vs the previous run, targets done |
+| `v_scan_domains` | per phase and domain (asset account: DNS root domain or cloud project) |
+| `v_scan_ips` | per phase and IP, with the hostnames behind it |
+| `v_scan_targets` | per phase and target (IP, host:port, URL); raw rows are in `run_targets` |
+
+```sh
+docker compose exec postgres psql -U exposure -c "SELECT ip, hosts, state, pct, targets_done, targets FROM v_scan_ips WHERE phase = 'nuclei'"
+```
+
+The dashboard has the same in its collapsed "Current run" row, filtered by the `Run phase` variable.
+Failed runs keep their progress rows, so they also show where a run stopped.
+
 ## Alerts (Slack, via Grafana)
 
 | Rule | When |

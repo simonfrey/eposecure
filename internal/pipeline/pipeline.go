@@ -2,6 +2,7 @@
 package pipeline
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 	"github.com/simonfrey/exposure-scanner/internal/config"
 	"github.com/simonfrey/exposure-scanner/internal/diff"
 	"github.com/simonfrey/exposure-scanner/internal/model"
+	"github.com/simonfrey/exposure-scanner/internal/progress"
 	"github.com/simonfrey/exposure-scanner/internal/registry"
 	"github.com/simonfrey/exposure-scanner/internal/store"
 )
@@ -24,6 +27,7 @@ import (
 type Pipeline struct {
 	discoverers []registry.Discoverer
 	scanners    []registry.Scanner
+	phases      []string // progress phase per scanner, unique even if a scanner is configured twice
 	exclude     []string
 	maxDropPct  int
 	store       *store.Store
@@ -34,6 +38,8 @@ type RunOptions struct {
 	// AcceptDrift stores the run even if endpoints dropped sharply or a
 	// discovery source came back empty, e.g. after a real decommission.
 	AcceptDrift bool
+	// ProgressEvery is how often progress is logged. Default 30s.
+	ProgressEvery time.Duration
 }
 
 // New resolves all configured modules, failing fast on unknown names or bad options.
@@ -51,7 +57,23 @@ func New(cfg *config.Config, st *store.Store) (*Pipeline, error) {
 			sa.SetStore(st)
 		}
 	}
-	return &Pipeline{discoverers: d, scanners: s, exclude: cfg.Exclude, maxDropPct: cfg.MaxEndpointDropPct, store: st}, nil
+	return &Pipeline{discoverers: d, scanners: s, phases: phaseNames(s), exclude: cfg.Exclude,
+		maxDropPct: cfg.MaxEndpointDropPct, store: st}, nil
+}
+
+// phaseNames names each scanner's phase after the module, numbering repeats:
+// nuclei, nuclei#2. Names stay stable across runs so their durations can be compared.
+func phaseNames(scanners []registry.Scanner) []string {
+	seen := map[string]int{}
+	out := make([]string, len(scanners))
+	for i, s := range scanners {
+		seen[s.Name()]++
+		out[i] = s.Name()
+		if n := seen[s.Name()]; n > 1 {
+			out[i] += "#" + strconv.Itoa(n)
+		}
+	}
+	return out
 }
 
 // Run executes one full run and records it. A failing module fails the
@@ -66,7 +88,14 @@ func (p *Pipeline) Run(ctx context.Context, opts RunOptions) error {
 	log := slog.With("run", id)
 	start := time.Now()
 
-	snap, events, err := p.run(ctx, log, opts)
+	prev, err := p.store.PhaseDurations(ctx)
+	if err != nil {
+		log.Warn("no phase durations of the previous run, ETA unknown", "err", err)
+	}
+	tr := progress.New(id, log, p.store, append([]string{"discovery", "resolve"}, p.phases...), prev)
+	tr.Start(ctx, 10*time.Second, cmp.Or(opts.ProgressEvery, 30*time.Second))
+	snap, events, err := p.run(ctx, log, tr, opts)
+	tr.Close()
 	if err == nil {
 		err = p.store.FinishRun(ctx, id, snap, events)
 	}
@@ -79,12 +108,12 @@ func (p *Pipeline) Run(ctx context.Context, opts RunOptions) error {
 	return nil
 }
 
-func (p *Pipeline) run(ctx context.Context, log *slog.Logger, opts RunOptions) (model.Snapshot, []model.Event, error) {
+func (p *Pipeline) run(ctx context.Context, log *slog.Logger, tr *progress.Tracker, opts RunOptions) (model.Snapshot, []model.Event, error) {
 	prev, err := p.store.LastSnapshot(ctx)
 	if err != nil {
 		return model.Snapshot{}, nil, err
 	}
-	snap, names, err := p.scan(ctx, log)
+	snap, names, err := p.scan(ctx, log, tr)
 	if err != nil {
 		return snap, nil, err
 	}
@@ -102,9 +131,11 @@ func (p *Pipeline) run(ctx context.Context, log *slog.Logger, opts RunOptions) (
 }
 
 // scan returns the snapshot and the scanned names per IP.
-func (p *Pipeline) scan(ctx context.Context, log *slog.Logger) (model.Snapshot, map[string][]string, error) {
+func (p *Pipeline) scan(ctx context.Context, log *slog.Logger, tr *progress.Tracker) (model.Snapshot, map[string][]string, error) {
 	var snap model.Snapshot
 
+	phase := tr.Phase("discovery")
+	phase.Add("", len(p.discoverers))
 	results := make([][]model.Asset, len(p.discoverers))
 	g, gctx := errgroup.WithContext(ctx)
 	for i, d := range p.discoverers {
@@ -118,6 +149,7 @@ func (p *Pipeline) scan(ctx context.Context, log *slog.Logger) (model.Snapshot, 
 				assets[j].Target = normalize(assets[j].Target)
 			}
 			log.Info("discovered", "module", d.Name(), "assets", len(assets))
+			phase.Done("", 1)
 			results[i] = assets
 			return nil
 		})
@@ -127,16 +159,24 @@ func (p *Pipeline) scan(ctx context.Context, log *slog.Logger) (model.Snapshot, 
 	if err != nil {
 		return snap, nil, err
 	}
+	phase.End()
+	tr.SetAssets(snap.Assets)
 
 	scan, takeover := splitTakeover(snap.Assets)
 	sc := &model.ScanContext{TakeoverCandidates: targets(takeover, p.exclude)}
-	sc.Targets, sc.Names = resolve(ctx, log, targets(scan, p.exclude), p.exclude)
+	phase = tr.Phase("resolve")
+	sc.Targets, sc.Names = resolve(ctx, log, targets(scan, p.exclude), p.exclude, phase)
+	phase.End()
+	tr.SetNames(sc.Names)
 	log.Info("scanning", "ips", len(sc.Targets), "takeover_candidates", len(sc.TakeoverCandidates))
-	for _, s := range p.scanners {
+	for i, s := range p.scanners {
+		phase = tr.Phase(p.phases[i])
+		sc.Reporter = phase
 		if err := s.Scan(ctx, sc); err != nil {
 			snap.Endpoints, snap.Findings = sc.Endpoints, unique(sc.Findings)
 			return snap, nil, fmt.Errorf("scanner %s: %w", s.Name(), err)
 		}
+		phase.End()
 		log.Info("scanned", "module", s.Name(), "endpoints", len(sc.Endpoints), "findings", len(sc.Findings))
 	}
 	snap.Endpoints, snap.Findings = sc.Endpoints, unique(sc.Findings)

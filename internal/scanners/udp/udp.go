@@ -67,12 +67,15 @@ func (u *UDP) Scan(ctx context.Context, sc *model.ScanContext) error {
 	if len(u.Ports) == 0 {
 		return nil
 	}
+	prog := sc.Progress()
 	var mu sync.Mutex
 	var g errgroup.Group
 	g.SetLimit(u.Concurrency)
 	for _, ip := range sc.Targets {
+		prog.Add(ip, len(u.Ports))
 		for _, port := range u.Ports {
 			g.Go(func() error {
+				defer prog.Done(ip, 1)
 				p := probes[port]
 				ok, f := u.send(ctx, ip, port, p)
 				if !ok {

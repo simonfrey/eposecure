@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/simonfrey/exposure-scanner/internal/model"
+	"github.com/simonfrey/exposure-scanner/internal/progress"
 	"github.com/simonfrey/exposure-scanner/internal/registry"
 )
 
@@ -42,7 +43,7 @@ func TestNormalize(t *testing.T) {
 }
 
 func TestResolveScansEachIPOnce(t *testing.T) {
-	ips, names := resolve(context.Background(), slog.Default(), []string{"127.0.0.1", "localhost"}, []string{"::1/128"})
+	ips, names := resolve(context.Background(), slog.Default(), []string{"127.0.0.1", "localhost"}, []string{"::1/128"}, model.NoProgress{})
 	if !slices.Equal(ips, []string{"127.0.0.1"}) {
 		t.Fatalf("ips = %v (::1 is excluded)", ips)
 	}
@@ -106,6 +107,7 @@ type named string
 
 func (n named) Name() string                                    { return string(n) }
 func (n named) Discover(context.Context) ([]model.Asset, error) { return nil, nil }
+func (n named) Scan(context.Context, *model.ScanContext) error  { return nil }
 
 func TestCheckDrift(t *testing.T) {
 	p := &Pipeline{discoverers: []registry.Discoverer{named("dns"), named("cloudlist")}, maxDropPct: 50}
@@ -156,19 +158,29 @@ func (f fakeScanner) Scan(_ context.Context, sc *model.ScanContext) error {
 }
 
 func TestScanKeepsPartialResultsOnError(t *testing.T) {
+	scanners := []registry.Scanner{
+		fakeScanner{add: model.Endpoint{Host: "192.0.2.1", Port: 22}},
+		fakeScanner{err: errors.New("boom")},
+	}
 	p := &Pipeline{
 		discoverers: []registry.Discoverer{fakeDiscoverer{{Target: "192.0.2.1"}}},
-		scanners: []registry.Scanner{
-			fakeScanner{add: model.Endpoint{Host: "192.0.2.1", Port: 22}},
-			fakeScanner{err: errors.New("boom")},
-		},
+		scanners:    scanners,
+		phases:      phaseNames(scanners),
 	}
-	snap, _, err := p.scan(t.Context(), slog.Default())
+	tr := progress.New(1, slog.Default(), nil, nil, nil)
+	snap, _, err := p.scan(t.Context(), slog.Default(), tr)
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("err = %v", err)
 	}
 	if len(snap.Assets) != 1 || len(snap.Endpoints) != 1 {
 		t.Fatalf("partial results lost: %+v", snap)
+	}
+}
+
+func TestPhaseNamesNumberRepeats(t *testing.T) {
+	got := phaseNames([]registry.Scanner{named("naabu"), named("nuclei"), named("nuclei")})
+	if want := []string{"naabu", "nuclei", "nuclei#2"}; !slices.Equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
 	}
 }
 

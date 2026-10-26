@@ -75,7 +75,7 @@ func (c *CVELookup) Scan(ctx context.Context, sc *model.ScanContext) error {
 		cpes = append(cpes, e.CPE...)
 	}
 	slices.Sort(cpes)
-	cves, err := c.resolve(ctx, slices.Compact(cpes))
+	cves, err := c.resolve(ctx, slices.Compact(cpes), sc.Progress())
 	if err != nil {
 		return err
 	}
@@ -102,7 +102,8 @@ func (c *CVELookup) Scan(ctx context.Context, sc *model.ScanContext) error {
 
 // resolve returns the CVEs per CPE, from the cache while fresh, otherwise
 // from NVD. If NVD fails, a stale cache entry is used instead of failing.
-func (c *CVELookup) resolve(ctx context.Context, cpes []string) (map[string][]cve, error) {
+func (c *CVELookup) resolve(ctx context.Context, cpes []string, prog model.Progress) (map[string][]cve, error) {
+	prog.Add("", len(cpes))
 	cached := map[string]store.CVECacheEntry{}
 	if c.cache != nil && len(cpes) > 0 {
 		var err error
@@ -114,6 +115,7 @@ func (c *CVELookup) resolve(ctx context.Context, cpes []string) (map[string][]cv
 	out := make(map[string][]cve, len(cpes))
 	var last time.Time
 	for _, cpe := range cpes {
+		prog.Done("", 1)
 		entry, hit := cached[cpe]
 		var old []cve
 		if hit && json.Unmarshal(entry.Data, &old) != nil {

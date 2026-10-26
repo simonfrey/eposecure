@@ -4,6 +4,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/projectdiscovery/nuclei/v3/pkg/output"
+
 	"github.com/simonfrey/exposure-scanner/internal/config"
 	"github.com/simonfrey/exposure-scanner/internal/model"
 )
@@ -37,5 +39,29 @@ func TestTargets(t *testing.T) {
 	n.TakeoverCandidates = true
 	if got, want := n.targets(sc), []string{"https://a.example.com", "a.example.com:22", "old.example.com"}; !slices.Equal(got, want) {
 		t.Errorf("with takeover candidates: got %v, want %v", got, want)
+	}
+}
+
+func TestAttribute(t *testing.T) {
+	in := newInputs([]string{"https://a.example.com", "http://a.example.com:8080", "a.example.com:22", "old.example.com"})
+	for i, c := range []struct {
+		ev        output.ResultEvent
+		key       string
+		first     bool
+		situation string
+	}{
+		{output.ResultEvent{TemplateID: "t1", Host: "a.example.com", Port: "443"}, "https://a.example.com", true, "by host and port"},
+		{output.ResultEvent{TemplateID: "t1", Host: "a.example.com", Port: "443"}, "", false, "second match of the same template"},
+		{output.ResultEvent{TemplateID: "t1", Host: "a.example.com:8080"}, "http://a.example.com:8080", true, "host:port in Host"},
+		{output.ResultEvent{TemplateID: "dns", Host: "a.example.com"}, "https://a.example.com", true, "no port: first target on the host"},
+		{output.ResultEvent{TemplateID: "dns", Host: "a.example.com"}, "http://a.example.com:8080", true, "no port: next target on the host"},
+		{output.ResultEvent{TemplateID: "t2", URL: "a.example.com:22"}, "a.example.com:22", true, "from the URL"},
+		{output.ResultEvent{TemplateID: "t2", Host: "OLD.example.com", Port: "80"}, "old.example.com", true, "bare hostname"},
+		{output.ResultEvent{TemplateID: "t2", Host: "other.example.com"}, "", false, "unknown host"},
+	} {
+		key, first := in.attribute(&c.ev)
+		if key != c.key || first != c.first {
+			t.Errorf("%d %s: got %q %v, want %q %v", i, c.situation, key, first, c.key, c.first)
+		}
 	}
 }

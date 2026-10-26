@@ -74,7 +74,33 @@ type ScanContext struct {
 	// but still have a CNAME. nuclei's takeover templates check whether the
 	// resource behind them can be claimed.
 	TakeoverCandidates []string
+	// Reporter receives the scanner's units of work, see Progress().
+	Reporter Progress
 }
+
+// Progress returns where scanners report their progress; a no-op if unset.
+func (sc *ScanContext) Progress() Progress {
+	if sc.Reporter == nil {
+		return NoProgress{}
+	}
+	return sc.Reporter
+}
+
+// Progress receives a module's units of work per target: an IP, host:port,
+// URL or hostname, whatever the module works on. "" counts for the module as
+// a whole. Implementations are safe for concurrent use.
+type Progress interface {
+	Add(target string, total int) // announce units of work
+	Done(target string, n int)    // n units finished
+	Finish(target string)         // target complete, including units never reported
+}
+
+// NoProgress discards progress, e.g. in tests.
+type NoProgress struct{}
+
+func (NoProgress) Add(string, int)  {}
+func (NoProgress) Done(string, int) {}
+func (NoProgress) Finish(string)    {}
 
 // Snapshot is the complete result of one successful run.
 type Snapshot struct {

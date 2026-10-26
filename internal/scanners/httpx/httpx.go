@@ -38,6 +38,7 @@ func (h *HTTPX) Scan(_ context.Context, sc *model.ScanContext) error {
 	}
 	byAddr := map[string]*model.Endpoint{}
 	var inputs goflags.StringSlice
+	prog := sc.Progress()
 	for i := range sc.Endpoints {
 		e := &sc.Endpoints[i]
 		if e.Protocol == "udp" {
@@ -45,6 +46,7 @@ func (h *HTTPX) Scan(_ context.Context, sc *model.ScanContext) error {
 		}
 		byAddr[e.Addr()] = e
 		inputs = append(inputs, e.Addr())
+		prog.Add(e.Addr(), 1)
 	}
 	if len(inputs) == 0 {
 		return nil
@@ -68,7 +70,10 @@ func (h *HTTPX) Scan(_ context.Context, sc *model.ScanContext) error {
 		DisableUpdateCheck:  true,
 		Silent:              true,
 		DisableStdout:       true,
+		// Probe makes httpx report failed inputs too, so every input counts as progress.
+		Probe: true,
 		OnResult: func(r runner.Result) {
+			prog.Done(r.Input, 1)
 			if r.Err != nil || r.Failed {
 				return
 			}
