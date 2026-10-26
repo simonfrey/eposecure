@@ -23,6 +23,25 @@ func TestOptions(t *testing.T) {
 	}
 }
 
+func TestInteractsh(t *testing.T) {
+	n, err := New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o := n.interactsh(); !o.NoInteractsh {
+		t.Errorf("callbacks on without a server (would use public oast.* servers): %+v", o)
+	} else if o.CacheSize <= 0 {
+		t.Errorf("nuclei panics on a zero cache size even with callbacks off: %+v", o)
+	}
+	n, err = New(config.Options{"interactsh_server": "https://oob.example.com", "interactsh_token": "s3cret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o := n.interactsh(); o.NoInteractsh || o.ServerURL != "https://oob.example.com" || o.Authorization != "s3cret" {
+		t.Errorf("own server not used: %+v", o)
+	}
+}
+
 func TestTargets(t *testing.T) {
 	sc := &model.ScanContext{
 		Endpoints: []model.Endpoint{

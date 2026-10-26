@@ -33,6 +33,13 @@ type Nuclei struct {
 	// hosts finish one after another) or template-spray (each template on
 	// all hosts, so all hosts finish together at the end).
 	ScanStrategy string `yaml:"scan_strategy"`
+	// InteractshServer receives the out-of-band callbacks of blind RCE/SSRF
+	// templates (https URL of a self-hosted interactsh-server). Empty turns
+	// callbacks off, and templates that need one are skipped. The SDK
+	// default would be ProjectDiscovery's public oast.* servers, where a
+	// vulnerable host of ours would send its request to a third party.
+	InteractshServer string `yaml:"interactsh_server"`
+	InteractshToken  string `yaml:"interactsh_token"`
 }
 
 func New(o config.Options) (*Nuclei, error) {
@@ -75,7 +82,9 @@ func (n *Nuclei) Scan(ctx context.Context, sc *model.ScanContext) error {
 	}
 
 	c := n.Concurrency
+	slog.Info("nuclei out-of-band callbacks", "module", n.Name(), "interactsh", cmp.Or(n.InteractshServer, "off"))
 	ne, err := nuclei.NewNucleiEngineCtx(ctx,
+		nuclei.WithInteractshOptions(n.interactsh()),
 		nuclei.WithTemplateFilters(nuclei.TemplateFilters{
 			Severity:    strings.Join(n.Severities, ","),
 			Tags:        n.Tags,
@@ -156,6 +165,22 @@ func (n *Nuclei) Scan(ctx context.Context, sc *model.ScanContext) error {
 			Raw:        ev,
 		})
 	})
+}
+
+// interactsh returns nuclei's default callback settings pointed at our
+// server, or turned off without one. The caches are needed either way:
+// nuclei builds them before it checks whether callbacks are off.
+func (n *Nuclei) interactsh() nuclei.InteractshOpts {
+	return nuclei.InteractshOpts{
+		ServerURL:           n.InteractshServer,
+		Authorization:       n.InteractshToken,
+		NoInteractsh:        n.InteractshServer == "",
+		CacheSize:           5000,
+		Eviction:            60 * time.Second,
+		CooldownPeriod:      5 * time.Second,
+		PollDuration:        5 * time.Second,
+		DisableHttpFallback: true,
+	}
 }
 
 // inputs attributes nuclei's result events to the target they ran on.

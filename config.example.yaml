@@ -54,6 +54,9 @@ scanners: # run in order, each builds on the previous output
     rate_limit: 50
     follow_host_redirects: true # same-host redirects only; other hosts' pages are not ours
   - use: banner # service and version on non-HTTP ports (ssh, redis, mysql, ...)
+  # Exploit proofs-of-concept for known CVEs (RCE, SQLi, LFI, SSRF, ...). They
+  # change nothing, but on a vulnerable host they do run (e.g. `id`, reading
+  # /etc/passwd, a time-based SLEEP). dos, fuzz and intrusive stay excluded.
   - use: nuclei # vulnerabilities
     severities: [medium, high, critical]
     exclude_tags: [dos, fuzz, intrusive]
@@ -63,6 +66,15 @@ scanners: # run in order, each builds on the previous output
     # one after another and progress per host means something. template-spray
     # runs each template on all hosts, so all hosts finish together at the end.
     scan_strategy: host-spray
+    # Out-of-band callbacks for blind RCE/SSRF templates go to your own
+    # interactsh server (see README). Empty = off, and those templates are
+    # skipped. Never the public oast.* servers: a vulnerable host of yours
+    # would send its request to a third party.
+    interactsh_server: ${INTERACTSH_SERVER}
+    interactsh_token: ${INTERACTSH_TOKEN}
+  # default-login POSTs vendor default credentials (admin/admin, ...) to login
+  # forms. That can trip account lockout and failed-login alerts: tell your
+  # security team the scanner's IP before the first run.
   - use: nuclei # exposures: admin panels, leaked files, default logins, TLS, takeovers, at any severity
     severities: [info, low, medium, high, critical]
     tags: [panel, exposure, misconfig, default-login, takeover, ssl]
@@ -73,13 +85,16 @@ scanners: # run in order, each builds on the previous output
     takeover_candidates: true # also check dangling CNAMEs found by dns
     rate_limit: 50
     concurrency: 10
+    interactsh_server: ${INTERACTSH_SERVER}
+    interactsh_token: ${INTERACTSH_TOKEN}
   - use: cve_lookup
     min_severity: medium
     api_key: ${NVD_API_KEY} # optional; https://nvd.nist.gov/developers/request-an-api-key
     cache_ttl_hours: 20 # reuse NVD answers this long; older ones are still used if NVD is down
   - use: exploit_intel # last: marks CVEs exploited in the wild (CISA KEV) and adds EPSS
 
-# Never scanned, even if discovered. IPs, CIDRs or hostnames.
+# Never scanned, even if discovered. IPs, CIDRs or hostnames. Candidates:
+# fragile devices, services billed per request, SaaS vendors' hosts.
 exclude: []
 
 # Fail a run instead of reporting closures when open endpoints drop by more

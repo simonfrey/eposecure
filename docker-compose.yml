@@ -51,6 +51,21 @@ services:
       postgres:
         condition: service_healthy
 
+  # Optional: receives nuclei's out-of-band callbacks, so blind RCE/SSRF
+  # templates work without ProjectDiscovery's public servers. Needs a
+  # delegated domain and ports 53, 80 and 443 on this host (see README).
+  # Same version as the interactsh client nuclei is built with.
+  interactsh:
+    image: projectdiscovery/interactsh-server:v1.3.1@sha256:f75d1fdeb0598012ce4560158232a9ad99701da28b31c141dc95d03402e4aa4f
+    profiles: [interactsh]
+    restart: unless-stopped
+    command: -domain ${INTERACTSH_DOMAIN} -token ${INTERACTSH_TOKEN} -disable-update-check
+    ports:
+      - "53:53/udp"
+      - "53:53/tcp"
+      - "80:80"
+      - "443:443"
+
 volumes:
   pgdata:
   grafana-data:

@@ -188,7 +188,7 @@ for all options.
 | `udp` | DNS, TFTP, NTP, SNMP and SSDP on the listed `ports` (off when empty); only replies count as open |
 | `httpx` | HTTP probe, tech detection; `follow_host_redirects` (default on) follows redirects on the same host only |
 | `banner` | service on non-HTTP ports; versioned CPEs only for exact upstream versions (distro builds with backports are skipped) |
-| `nuclei` | templates by `severities`, `tags`, `exclude_tags` (default `dos`, `fuzz`, `intrusive`), `exclude_ids`, `rate_limit`, `concurrency`; `takeover_candidates` adds dangling CNAMEs as targets; templates auto-update into the `scanner-home` volume. Use it twice: once for vulnerabilities, once for exposures at any severity (see `config.example.yaml`) |
+| `nuclei` | templates by `severities`, `tags`, `exclude_tags` (default `dos`, `fuzz`, `intrusive`), `exclude_ids`, `rate_limit`, `concurrency`; `takeover_candidates` adds dangling CNAMEs as targets; `interactsh_server`/`interactsh_token` for out-of-band callbacks (off when empty, see below); templates auto-update into the `scanner-home` volume. Use it twice: once for vulnerabilities, once for exposures at any severity (see `config.example.yaml`) |
 | `cve_lookup` | NVD CVEs for detected versions, `min_severity`, optional `api_key` (10× faster), `cache_ttl_hours` (default 20; stale entries are used if NVD is down) |
 | `exploit_intel` | marks CVE findings in [CISA KEV] and adds [EPSS]; falls back to CISA's GitHub mirror (`kev_mirror_url`) when cisa.gov is unreachable, as it blocks some hosting IPs; put it last |
 
@@ -235,12 +235,63 @@ update `.env`, then `docker compose up -d scanner`.
 3. Remove the firewall rule and run again. Expect *Closed public endpoints*. If the test VM is
    most of what you expose, the drift guard fails this run; repeat it with `run-once --accept-drift`.
 
-## Operating notes
+## What a scan does to a target
 
+Nothing floods, fuzzes or deletes, and the rates are below what internet-wide scanners like
+Shodan already send every day. What each step sends:
+
+| Step | Traffic | Side effects |
+|---|---|---|
+| naabu | TCP connect to ~1000 ports, 300 packets/s in total | none on modern systems; old embedded devices can hang |
+| udp (opt-in) | one protocol request per port | none |
+| httpx | one GET per open port, same-host redirects | none |
+| banner | reads the greeting, or one handshake/`INFO` for databases | none |
+| nuclei (vulnerabilities) | ~6000 templates per URL: exploit proofs-of-concept for known CVEs, 50 requests/s in total | they change nothing, but **on a vulnerable host they do run**: `id`, reading `/etc/passwd`, a time-based SQL `SLEEP`. Templates tagged `dos`, `fuzz`, `intrusive` are excluded (tags are set by template authors, so this is a convention, not a guarantee) |
+| nuclei (exposures) | ~4000 templates, incl. `default-login` | `default-login` POSTs vendor default credentials: account lockout and failed-login alerts are possible |
+
+nuclei stops testing a host after 30 errors in a row (logged as "skipped templates on
+unresponsive hosts").
+
+### Out-of-band callbacks (interactsh)
+
+Blind RCE/SSRF/XXE templates (about 500) make the target call back to a server, which is how
+nuclei sees that the exploit worked. nuclei's default is ProjectDiscovery's public `oast.*`
+servers. A vulnerable host of yours would then send its request, with headers and internal
+names, to a third party. So callbacks are **off unless `interactsh_server` is set**, and those
+templates are skipped.
+
+To run your own server:
+
+1. Pick a domain used only for this (not a company domain), e.g. `oob-example.net`. At its
+   registrar create glue records `ns1.oob-example.net` and `ns2.oob-example.net` pointing at the
+   scanner host's public IP, and set them as the domain's nameservers.
+2. The host must have ports 53 (TCP+UDP), 80 and 443 free and reachable from the internet.
+3. In `.env`: `INTERACTSH_DOMAIN=oob-example.net`, a random `INTERACTSH_TOKEN`
+   (`openssl rand -hex 32`), and `INTERACTSH_SERVER=https://oob-example.net`.
+4. `docker compose --profile interactsh up -d`. The server gets its TLS certificate by itself.
+   The scanner logs `interactsh=https://oob-example.net` at the start of each nuclei phase.
+
+## Running it safely
+
+- Tell your security team and SOC before the first run: the scanner's egress IP, the schedule,
+  and that failed-login alerts from `default-login` are expected.
+- Scan from a dedicated egress IP, never one shared with production (e.g. a Cloud NAT). A WAF,
+  fail2ban or third-party API that bans the scanner would ban production too.
 - Check your hosting provider's acceptable-use policy on port scanning, and tell them in advance
   if needed. Some (e.g. Hetzner) send abuse notices even for scans of your own IPs.
 - Never allowlist the scanner's IP in your firewalls, or the results stop reflecting the internet's view.
-- The scanner only scans targets that come from discovery; nothing else is ever touched.
+- The scanner only scans targets that come from discovery; nothing else is ever touched. Put
+  fragile devices, services billed per request and SaaS vendors' hosts into `exclude`.
+- Roll out in stages, one `run-once` each, while watching the targets' dashboards and logs. Use
+  a separate config, e.g. `docker compose run --rm -e CONFIG_PATH=/config/stage.yaml -v
+  ./stage.yaml:/config/stage.yaml:ro scanner run-once`:
+  1. `static_list` with 2–3 hosts you own, scanners `naabu`, `httpx`, `banner` only;
+  2. the same hosts with both nuclei blocks;
+  3. one cloud project or one root domain;
+  4. everything, scheduled outside peak hours.
+- Kill switch: `docker compose stop scanner`. The run is recorded as failed and its data is kept.
+- Load knobs: naabu `rate` (packets/s), nuclei `rate_limit` (requests/s across all hosts, so
+  one host never sees more) and `concurrency`, httpx `rate_limit`.
 
 ## Development
 
