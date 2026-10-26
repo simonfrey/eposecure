@@ -190,7 +190,7 @@ for all options.
 | `banner` | service on non-HTTP ports; versioned CPEs only for exact upstream versions (distro builds with backports are skipped) |
 | `nuclei` | templates by `severities`, `tags`, `exclude_tags` (default `dos`, `fuzz`, `intrusive`), `exclude_ids`, `rate_limit`, `concurrency`; `takeover_candidates` adds dangling CNAMEs as targets; templates auto-update into the `scanner-home` volume. Use it twice: once for vulnerabilities, once for exposures at any severity (see `config.example.yaml`) |
 | `cve_lookup` | NVD CVEs for detected versions, `min_severity`, optional `api_key` (10× faster), `cache_ttl_hours` (default 20; stale entries are used if NVD is down) |
-| `exploit_intel` | marks CVE findings in [CISA KEV] and adds [EPSS]; put it last |
+| `exploit_intel` | marks CVE findings in [CISA KEV] and adds [EPSS]; falls back to CISA's GitHub mirror (`kev_mirror_url`) when cisa.gov is unreachable, as it blocks some hosting IPs; put it last |
 
 Rates default to conservative values so they don't trip Cloud Armor or production rate limits.
 
