@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/simonfrey/exposure-scanner/internal/model"
+	"github.com/simonfrey/eposecure/internal/model"
 )
 
 type fakeSink struct{ updates []Update }

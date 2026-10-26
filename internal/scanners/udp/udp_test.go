@@ -7,7 +7,7 @@ import (
 
 	miekgdns "github.com/miekg/dns"
 
-	"github.com/simonfrey/exposure-scanner/internal/config"
+	"github.com/simonfrey/eposecure/internal/config"
 )
 
 func TestNewRejectsUnknownPort(t *testing.T) {

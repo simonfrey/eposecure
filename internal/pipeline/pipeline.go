@@ -16,12 +16,12 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/simonfrey/exposure-scanner/internal/config"
-	"github.com/simonfrey/exposure-scanner/internal/diff"
-	"github.com/simonfrey/exposure-scanner/internal/model"
-	"github.com/simonfrey/exposure-scanner/internal/progress"
-	"github.com/simonfrey/exposure-scanner/internal/registry"
-	"github.com/simonfrey/exposure-scanner/internal/store"
+	"github.com/simonfrey/eposecure/internal/config"
+	"github.com/simonfrey/eposecure/internal/diff"
+	"github.com/simonfrey/eposecure/internal/model"
+	"github.com/simonfrey/eposecure/internal/progress"
+	"github.com/simonfrey/eposecure/internal/registry"
+	"github.com/simonfrey/eposecure/internal/store"
 )
 
 type Pipeline struct {

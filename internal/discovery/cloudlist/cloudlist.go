@@ -10,8 +10,8 @@ import (
 	"github.com/projectdiscovery/cloudlist/pkg/inventory"
 	"github.com/projectdiscovery/cloudlist/pkg/schema"
 
-	"github.com/simonfrey/exposure-scanner/internal/config"
-	"github.com/simonfrey/exposure-scanner/internal/model"
+	"github.com/simonfrey/eposecure/internal/config"
+	"github.com/simonfrey/eposecure/internal/model"
 )
 
 // accountKeys are the metadata keys cloudlist providers use for the tenancy unit.

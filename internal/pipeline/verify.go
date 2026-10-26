@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/simonfrey/exposure-scanner/internal/model"
+	"github.com/simonfrey/eposecure/internal/model"
 )
 
 // stillOpen re-checks endpoints of the previous run that the current scan did

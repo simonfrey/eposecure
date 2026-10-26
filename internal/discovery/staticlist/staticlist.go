@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"net/netip"
 
-	"github.com/simonfrey/exposure-scanner/internal/config"
-	"github.com/simonfrey/exposure-scanner/internal/model"
+	"github.com/simonfrey/eposecure/internal/config"
+	"github.com/simonfrey/eposecure/internal/model"
 )
 
 type StaticList struct {

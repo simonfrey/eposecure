@@ -1,4 +1,4 @@
-# exposure-scanner
+# eposecure
 
 Finds everything you expose to the internet and scans it from the outside, like an attacker would.
 Discovery covers cloud inventories (GCP, AWS, Azure, … via [cloudlist]) and DNS. Scanning uses

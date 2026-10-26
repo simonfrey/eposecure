@@ -24,4 +24,4 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/simonfrey/exposure-scanner
+        - github.com/simonfrey/eposecure

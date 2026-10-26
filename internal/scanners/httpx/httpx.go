@@ -10,8 +10,8 @@ import (
 	"github.com/projectdiscovery/goflags"
 	"github.com/projectdiscovery/httpx/runner"
 
-	"github.com/simonfrey/exposure-scanner/internal/config"
-	"github.com/simonfrey/exposure-scanner/internal/model"
+	"github.com/simonfrey/eposecure/internal/config"
+	"github.com/simonfrey/eposecure/internal/model"
 )
 
 type HTTPX struct {

@@ -20,8 +20,8 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/structpb"
 
-	"github.com/simonfrey/exposure-scanner/internal/config"
-	"github.com/simonfrey/exposure-scanner/internal/model"
+	"github.com/simonfrey/eposecure/internal/config"
+	"github.com/simonfrey/eposecure/internal/model"
 )
 
 type AssetSearch struct {

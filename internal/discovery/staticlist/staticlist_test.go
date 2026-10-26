@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simonfrey/exposure-scanner/internal/config"
+	"github.com/simonfrey/eposecure/internal/config"
 )
 
 func targets(t *testing.T, s *StaticList) []string {

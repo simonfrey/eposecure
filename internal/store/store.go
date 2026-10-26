@@ -13,8 +13,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/simonfrey/exposure-scanner/internal/model"
-	"github.com/simonfrey/exposure-scanner/internal/progress"
+	"github.com/simonfrey/eposecure/internal/model"
+	"github.com/simonfrey/eposecure/internal/progress"
 )
 
 //go:embed schema.sql

@@ -3,7 +3,7 @@ package diff
 import (
 	"testing"
 
-	"github.com/simonfrey/exposure-scanner/internal/model"
+	"github.com/simonfrey/eposecure/internal/model"
 )
 
 func types(events []model.Event) map[string]int {

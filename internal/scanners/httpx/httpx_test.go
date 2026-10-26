@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/simonfrey/exposure-scanner/internal/model"
+	"github.com/simonfrey/eposecure/internal/model"
 )
 
 func TestVersionedCPE(t *testing.T) {

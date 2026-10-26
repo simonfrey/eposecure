@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/simonfrey/exposure-scanner/internal/config"
-	"github.com/simonfrey/exposure-scanner/internal/model"
-	"github.com/simonfrey/exposure-scanner/internal/store"
+	"github.com/simonfrey/eposecure/internal/config"
+	"github.com/simonfrey/eposecure/internal/model"
+	"github.com/simonfrey/eposecure/internal/store"
 )
 
 const nvdURL = "https://services.nvd.nist.gov/rest/json/cves/2.0"

@@ -1,4 +1,4 @@
-module github.com/simonfrey/exposure-scanner
+module github.com/simonfrey/eposecure
 
 go 1.27.3
 

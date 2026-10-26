@@ -5,7 +5,7 @@ import (
 	"cmp"
 	"math"
 
-	"github.com/simonfrey/exposure-scanner/internal/model"
+	"github.com/simonfrey/eposecure/internal/model"
 )
 
 // Compute returns the events between prev and cur. With an empty prev

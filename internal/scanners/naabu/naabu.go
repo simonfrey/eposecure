@@ -15,8 +15,8 @@ import (
 	"github.com/projectdiscovery/naabu/v2/pkg/runner"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/simonfrey/exposure-scanner/internal/config"
-	"github.com/simonfrey/exposure-scanner/internal/model"
+	"github.com/simonfrey/eposecure/internal/config"
+	"github.com/simonfrey/eposecure/internal/model"
 )
 
 type Naabu struct {

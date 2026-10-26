@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/simonfrey/exposure-scanner/internal/model"
+	"github.com/simonfrey/eposecure/internal/model"
 )
 
 // Sink persists progress. Only rows that changed since the last save are passed.

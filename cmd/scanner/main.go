@@ -21,9 +21,9 @@ import (
 	"github.com/projectdiscovery/gologger"
 	"github.com/projectdiscovery/gologger/levels"
 
-	"github.com/simonfrey/exposure-scanner/internal/config"
-	"github.com/simonfrey/exposure-scanner/internal/pipeline"
-	"github.com/simonfrey/exposure-scanner/internal/store"
+	"github.com/simonfrey/eposecure/internal/config"
+	"github.com/simonfrey/eposecure/internal/pipeline"
+	"github.com/simonfrey/eposecure/internal/store"
 )
 
 func main() {

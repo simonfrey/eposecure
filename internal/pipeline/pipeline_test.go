@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simonfrey/exposure-scanner/internal/model"
-	"github.com/simonfrey/exposure-scanner/internal/progress"
-	"github.com/simonfrey/exposure-scanner/internal/registry"
+	"github.com/simonfrey/eposecure/internal/model"
+	"github.com/simonfrey/eposecure/internal/progress"
+	"github.com/simonfrey/eposecure/internal/registry"
 )
 
 func TestTargets(t *testing.T) {
