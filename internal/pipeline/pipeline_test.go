@@ -196,11 +196,12 @@ func TestUnique(t *testing.T) {
 	}
 }
 
-func TestSplitTakeover(t *testing.T) {
-	scan, takeover := splitTakeover([]model.Asset{
+func TestSplitAssets(t *testing.T) {
+	scan, takeover := splitAssets([]model.Asset{
 		{Kind: "hostname", Target: "www.example.com"},
 		{Kind: "takeover", Target: "old.example.com"},
 		{Kind: "compute", Target: "1.2.3.4"},
+		{Kind: "related_domain", Target: "example.org"},
 	})
 	if len(scan) != 2 || len(takeover) != 1 || takeover[0].Target != "old.example.com" {
 		t.Fatalf("scan=%+v takeover=%+v", scan, takeover)

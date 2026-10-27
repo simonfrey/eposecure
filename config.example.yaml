@@ -31,6 +31,17 @@ discovery: # all run in parallel; if one fails the run fails and nothing is diff
     root_domains:
       - example.com
     max_enumeration_minutes: 10
+    # Off by default. Finds the owner's other domains in certificate transparency
+    # logs (crt.sh, free, no key): other domains on the root domains' certificates,
+    # and certificates issued to the same organization (OV/EV). There is no free
+    # reverse WHOIS; RDAP is only used to read the root domains' registrant org.
+    # Found domains are reported as assets of kind related_domain but not scanned,
+    # since they may belong to someone else. auto_scan treats them like root_domains.
+    # If crt.sh is down, the last run's related domains are kept.
+    # related_domains:
+    #   organizations: [] # e.g. ["Example GmbH"]; empty: RDAP registrant + root certs
+    #   auto_scan: false
+    #   max_certs: 200 # certificate downloads per run, newest first
 
   # Fixed IPs, CIDRs or hostnames, e.g. networks no cloud API lists.
   # A CIDR larger than max_ips (default 4096) is refused.

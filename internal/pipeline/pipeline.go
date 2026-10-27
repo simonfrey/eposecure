@@ -52,8 +52,13 @@ func New(cfg *config.Config, st *store.Store) (*Pipeline, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, sc := range s {
-		if sa, ok := sc.(registry.StoreAware); ok {
+	for _, m := range d {
+		if sa, ok := m.(registry.StoreAware); ok {
+			sa.SetStore(st)
+		}
+	}
+	for _, m := range s {
+		if sa, ok := m.(registry.StoreAware); ok {
 			sa.SetStore(st)
 		}
 	}
@@ -162,7 +167,7 @@ func (p *Pipeline) scan(ctx context.Context, log *slog.Logger, tr *progress.Trac
 	phase.End()
 	tr.SetAssets(snap.Assets)
 
-	scan, takeover := splitTakeover(snap.Assets)
+	scan, takeover := splitAssets(snap.Assets)
 	sc := &model.ScanContext{TakeoverCandidates: targets(takeover, p.exclude)}
 	phase = tr.Phase("resolve")
 	sc.Targets, sc.Names = resolve(ctx, log, targets(scan, p.exclude), p.exclude, phase)
@@ -183,13 +188,17 @@ func (p *Pipeline) scan(ctx context.Context, log *slog.Logger, tr *progress.Trac
 	return snap, sc.Names, nil
 }
 
-// splitTakeover separates hostnames that only have a dangling CNAME (kind
+// splitAssets separates hostnames that only have a dangling CNAME (kind
 // "takeover"): they cannot be port-scanned, only checked for takeover.
-func splitTakeover(assets []model.Asset) (scan, takeover []model.Asset) {
+// Related domains (kind "related_domain") are only reported: they may belong
+// to someone else, so they are never scanned.
+func splitAssets(assets []model.Asset) (scan, takeover []model.Asset) {
 	for _, a := range assets {
-		if a.Kind == "takeover" {
+		switch a.Kind {
+		case "takeover":
 			takeover = append(takeover, a)
-		} else {
+		case "related_domain":
+		default:
 			scan = append(scan, a)
 		}
 	}

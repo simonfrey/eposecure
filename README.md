@@ -155,6 +155,10 @@ The first run reports everything as new. Accepted findings never alert. Rules li
   public. Restrict access first, then rotate anything the leaked file contained.
 - **Takeover** (dangling CNAME): the name points at a cloud resource that no longer exists, so
   anyone may be able to claim it and serve content under your domain. Delete the DNS record.
+- **Related domain** (`dns` with `related_domains`): a domain that shares a certificate with your
+  root domains, or holds a certificate issued to your organization. It is a candidate, not proof
+  of ownership, so it is never scanned. If it is yours, add it to `root_domains` (or set
+  `auto_scan: true` to scan all of them). If not, ignore it.
 - **UDP findings** (open DNS resolver, SNMP `public`, SSDP, TFTP): these services should not answer
   the internet. They leak information and can be abused for amplification attacks. Firewall them.
 - **Accept a finding** that is a false positive or a known risk. It stays on the dashboard (toggle
@@ -179,7 +183,7 @@ for all options.
 |---|---|
 | `cloudlist` | any [cloudlist] provider; the `providers` blocks are passed through unchanged |
 | `gcp_asset_search` | Cloud Asset Inventory search across the org for every public IP and Cloud Run / Functions / App Engine URL; `asset_types` to narrow |
-| `dns` | subfinder passive subdomain enumeration (incl. certificate transparency) for `root_domains`; keeps names that resolve, and names with a dangling CNAME as takeover candidates |
+| `dns` | subfinder passive subdomain enumeration (incl. certificate transparency) for `root_domains`; keeps names that resolve, and names with a dangling CNAME as takeover candidates. Optional `related_domains`: the owner's other domains, see below |
 | `static_list` | fixed `targets`: IPs, CIDRs (up to `max_ips`, default 4096) or hostnames |
 
 | Scanner | |
