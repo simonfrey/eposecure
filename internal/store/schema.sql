@@ -87,7 +87,10 @@ CREATE INDEX IF NOT EXISTS assets_run_idx    ON assets (run_id);
 CREATE INDEX IF NOT EXISTS endpoints_run_idx ON endpoints (run_id);
 CREATE INDEX IF NOT EXISTS findings_run_idx  ON findings (run_id);
 CREATE INDEX IF NOT EXISTS events_run_idx    ON events (run_id);
-CREATE INDEX IF NOT EXISTS findings_key_idx  ON findings (template_id, matched_at, run_id);
+-- md5: a btree entry is capped at ~2.7kB and nuclei's matched_at can be a
+-- long URL with the payload in it.
+DROP INDEX IF EXISTS findings_key_idx;
+CREATE INDEX IF NOT EXISTS findings_key_md5_idx ON findings (template_id, md5(matched_at), run_id);
 CREATE INDEX IF NOT EXISTS endpoints_key_idx ON endpoints (host, port, run_id);
 CREATE INDEX IF NOT EXISTS cve_cache_idx     ON cve_cache (fetched_at);
 
@@ -155,7 +158,8 @@ SELECT c.template_id, c.matched_at,
        (SELECT min(finished_at) FROM ok WHERE ok.id > coalesce((
             SELECT max(o.id) FROM ok o WHERE NOT EXISTS (
                 SELECT 1 FROM findings x WHERE x.run_id = o.id
-                  AND x.template_id = c.template_id AND x.matched_at = c.matched_at)), 0)
+                  AND x.template_id = c.template_id AND md5(x.matched_at) = md5(c.matched_at)
+                  AND x.matched_at = c.matched_at)), 0)
        ) AS first_seen
 FROM (SELECT DISTINCT template_id, matched_at FROM findings WHERE run_id = (SELECT id FROM v_latest_run)) c;
 
