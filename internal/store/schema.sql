@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS run_targets (
 );
 
 CREATE INDEX IF NOT EXISTS assets_run_idx    ON assets (run_id);
+CREATE INDEX IF NOT EXISTS assets_target_idx ON assets (run_id, target);
 CREATE INDEX IF NOT EXISTS endpoints_run_idx ON endpoints (run_id);
 CREATE INDEX IF NOT EXISTS findings_run_idx  ON findings (run_id);
 CREATE INDEX IF NOT EXISTS events_run_idx    ON events (run_id);
@@ -95,7 +96,7 @@ CREATE INDEX IF NOT EXISTS endpoints_key_idx ON endpoints (host, port, run_id);
 CREATE INDEX IF NOT EXISTS cve_cache_idx     ON cve_cache (fetched_at);
 
 -- Views are recreated on every start so their columns can change freely.
-DROP VIEW IF EXISTS v_latest_run, v_run_stats, v_baseline, v_run_deltas, v_current_endpoints,
+DROP VIEW IF EXISTS v_latest_run, v_run_stats, v_run_scope_stats, v_baseline, v_run_deltas, v_current_endpoints,
     v_current_findings, v_events, v_latest_events, v_endpoint_ages, v_finding_ages,
     v_scan_status, v_scan_phases, v_scan_domains, v_scan_ips, v_scan_targets CASCADE;
 
@@ -140,6 +141,45 @@ SELECT s.*,
 FROM v_run_stats s
 LEFT JOIN v_run_stats b ON b.run_id = (SELECT run_id FROM v_baseline)
 WINDOW w AS (ORDER BY s.run_id);
+
+-- v_run_stats split by provider/account, so the dashboard overview can follow
+-- its filters. One row per successful run and every provider/account ever
+-- seen, zeros included, so filtered series have no gaps. Targets without an
+-- asset count under ''. Summed over all rows it equals v_run_stats.
+CREATE VIEW v_run_scope_stats AS
+WITH ok AS (SELECT id, started_at, finished_at FROM runs WHERE status = 'success'),
+e AS (
+    SELECT e.run_id, coalesce(a.provider, '') AS provider, coalesce(a.account, '') AS account,
+           count(*) AS endpoints
+    FROM endpoints e
+    JOIN ok ON ok.id = e.run_id
+    LEFT JOIN LATERAL (
+        SELECT provider, account FROM assets WHERE run_id = e.run_id AND target = e.host LIMIT 1
+    ) a ON true
+    GROUP BY 1, 2, 3
+),
+f AS (
+    SELECT f.run_id, coalesce(a.provider, '') AS provider, coalesce(a.account, '') AS account,
+           count(*) AS findings,
+           count(*) FILTER (WHERE severity = 'critical') AS critical,
+           count(*) FILTER (WHERE severity = 'high')     AS high,
+           count(*) FILTER (WHERE severity = 'medium')   AS medium,
+           count(*) FILTER (WHERE exploited)             AS exploited
+    FROM findings f
+    JOIN ok ON ok.id = f.run_id
+    LEFT JOIN LATERAL (
+        SELECT provider, account FROM assets WHERE run_id = f.run_id AND target = f.target LIMIT 1
+    ) a ON true
+    GROUP BY 1, 2, 3
+),
+s AS (SELECT * FROM e FULL JOIN f USING (run_id, provider, account))
+SELECT ok.id AS run_id, ok.started_at, ok.finished_at, sc.provider, sc.account,
+       coalesce(s.endpoints, 0) AS endpoints, coalesce(s.findings, 0) AS findings,
+       coalesce(s.critical, 0) AS critical, coalesce(s.high, 0) AS high,
+       coalesce(s.medium, 0) AS medium, coalesce(s.exploited, 0) AS exploited
+FROM ok
+CROSS JOIN (SELECT DISTINCT provider, account FROM s) sc
+LEFT JOIN s ON s.run_id = ok.id AND s.provider = sc.provider AND s.account = sc.account;
 
 -- Since when an endpoint or finding of the latest run has been there without
 -- a gap: the first run after the last successful run that did not have it.

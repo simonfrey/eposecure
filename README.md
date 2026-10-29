@@ -77,6 +77,7 @@ Postgres database `exposure`. Raw per-run tables: `runs`, `assets`, `endpoints`,
 |---|---|
 | `v_latest_run` | latest successful run |
 | `v_run_stats` | counts per run (assets, endpoints, findings by severity) |
+| `v_run_scope_stats` | `v_run_stats` split by provider/account (zeros included), for filtered overviews |
 | `v_run_deltas` | per run: change vs previous run, `progress_pct` vs baseline |
 | `v_current_endpoints` / `v_current_findings` | latest state, joined with provider/account/resource, `first_seen` and `age_days`; endpoints carry `protocol` and `service`; findings also carry `exploited`, `epss`, `tags`, `accepted` |
 | `v_events` / `v_latest_events` | changes between runs |

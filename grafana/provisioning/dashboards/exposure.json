@@ -127,7 +127,7 @@
           "format": "table",
           "rawQuery": true,
           "editorMode": "code",
-          "rawSql": "SELECT endpoints AS \"Endpoints\" FROM v_run_deltas ORDER BY run_id DESC LIMIT 1"
+          "rawSql": "WITH s AS (SELECT run_id, finished_at, sum(endpoints) AS endpoints, sum(findings) AS findings, sum(critical) AS critical, sum(high) AS high, sum(medium) AS medium\n  FROM v_run_scope_stats WHERE ('__all' IN (${provider:sqlstring}) OR provider IN (${provider:sqlstring})) AND ('__all' IN (${account:sqlstring}) OR account IN (${account:sqlstring})) GROUP BY run_id, finished_at),\nd AS (SELECT s.*, s.endpoints - lag(s.endpoints) OVER (ORDER BY s.run_id) AS endpoints_delta,\n  round(100.0 * (b.endpoints - s.endpoints) / nullif(b.endpoints, 0), 1) AS progress_pct\n  FROM s LEFT JOIN s b ON b.run_id = (SELECT run_id FROM v_baseline))\nSELECT endpoints AS \"Endpoints\" FROM d ORDER BY run_id DESC LIMIT 1"
         }
       ],
       "fieldConfig": {
@@ -176,7 +176,7 @@
           "format": "table",
           "rawQuery": true,
           "editorMode": "code",
-          "rawSql": "SELECT endpoints_delta AS \"\u0394 endpoints\" FROM v_run_deltas ORDER BY run_id DESC LIMIT 1"
+          "rawSql": "WITH s AS (SELECT run_id, finished_at, sum(endpoints) AS endpoints, sum(findings) AS findings, sum(critical) AS critical, sum(high) AS high, sum(medium) AS medium\n  FROM v_run_scope_stats WHERE ('__all' IN (${provider:sqlstring}) OR provider IN (${provider:sqlstring})) AND ('__all' IN (${account:sqlstring}) OR account IN (${account:sqlstring})) GROUP BY run_id, finished_at),\nd AS (SELECT s.*, s.endpoints - lag(s.endpoints) OVER (ORDER BY s.run_id) AS endpoints_delta,\n  round(100.0 * (b.endpoints - s.endpoints) / nullif(b.endpoints, 0), 1) AS progress_pct\n  FROM s LEFT JOIN s b ON b.run_id = (SELECT run_id FROM v_baseline))\nSELECT endpoints_delta AS \"\u0394 endpoints\" FROM d ORDER BY run_id DESC LIMIT 1"
         }
       ],
       "fieldConfig": {
@@ -242,7 +242,7 @@
           "format": "table",
           "rawQuery": true,
           "editorMode": "code",
-          "rawSql": "SELECT progress_pct AS \"Fewer than baseline\" FROM v_run_deltas ORDER BY run_id DESC LIMIT 1"
+          "rawSql": "WITH s AS (SELECT run_id, finished_at, sum(endpoints) AS endpoints, sum(findings) AS findings, sum(critical) AS critical, sum(high) AS high, sum(medium) AS medium\n  FROM v_run_scope_stats WHERE ('__all' IN (${provider:sqlstring}) OR provider IN (${provider:sqlstring})) AND ('__all' IN (${account:sqlstring}) OR account IN (${account:sqlstring})) GROUP BY run_id, finished_at),\nd AS (SELECT s.*, s.endpoints - lag(s.endpoints) OVER (ORDER BY s.run_id) AS endpoints_delta,\n  round(100.0 * (b.endpoints - s.endpoints) / nullif(b.endpoints, 0), 1) AS progress_pct\n  FROM s LEFT JOIN s b ON b.run_id = (SELECT run_id FROM v_baseline))\nSELECT progress_pct AS \"Fewer than baseline\" FROM d ORDER BY run_id DESC LIMIT 1"
         }
       ],
       "fieldConfig": {
@@ -304,7 +304,7 @@
           "format": "table",
           "rawQuery": true,
           "editorMode": "code",
-          "rawSql": "SELECT critical AS \"Critical\", high AS \"High\", medium AS \"Medium\" FROM v_run_deltas ORDER BY run_id DESC LIMIT 1"
+          "rawSql": "WITH s AS (SELECT run_id, finished_at, sum(endpoints) AS endpoints, sum(findings) AS findings, sum(critical) AS critical, sum(high) AS high, sum(medium) AS medium\n  FROM v_run_scope_stats WHERE ('__all' IN (${provider:sqlstring}) OR provider IN (${provider:sqlstring})) AND ('__all' IN (${account:sqlstring}) OR account IN (${account:sqlstring})) GROUP BY run_id, finished_at),\nd AS (SELECT s.*, s.endpoints - lag(s.endpoints) OVER (ORDER BY s.run_id) AS endpoints_delta,\n  round(100.0 * (b.endpoints - s.endpoints) / nullif(b.endpoints, 0), 1) AS progress_pct\n  FROM s LEFT JOIN s b ON b.run_id = (SELECT run_id FROM v_baseline))\nSELECT critical AS \"Critical\", high AS \"High\", medium AS \"Medium\" FROM d ORDER BY run_id DESC LIMIT 1"
         }
       ],
       "fieldConfig": {
@@ -366,7 +366,7 @@
           "format": "table",
           "rawQuery": true,
           "editorMode": "code",
-          "rawSql": "SELECT count(*) AS \"Exploited\" FROM v_current_findings WHERE exploited AND NOT accepted"
+          "rawSql": "SELECT count(*) AS \"Exploited\" FROM v_current_findings WHERE ('__all' IN (${provider:sqlstring}) OR coalesce(provider, '') IN (${provider:sqlstring})) AND ('__all' IN (${account:sqlstring}) OR coalesce(account, '') IN (${account:sqlstring})) AND exploited AND NOT accepted"
         }
       ],
       "fieldConfig": {
@@ -429,7 +429,7 @@
           "format": "table",
           "rawQuery": true,
           "editorMode": "code",
-          "rawSql": "SELECT count(*) AS \"Overdue\" FROM v_current_findings WHERE NOT accepted AND ((exploited OR severity IN ('critical', 'high')) AND age_days > 30 OR severity = 'medium' AND age_days > 90)"
+          "rawSql": "SELECT count(*) AS \"Overdue\" FROM v_current_findings WHERE ('__all' IN (${provider:sqlstring}) OR coalesce(provider, '') IN (${provider:sqlstring})) AND ('__all' IN (${account:sqlstring}) OR coalesce(account, '') IN (${account:sqlstring})) AND NOT accepted AND ((exploited OR severity IN ('critical', 'high')) AND age_days > 30 OR severity = 'medium' AND age_days > 90)"
         }
       ],
       "fieldConfig": {
@@ -541,7 +541,7 @@
           "format": "time_series",
           "rawQuery": true,
           "editorMode": "code",
-          "rawSql": "SELECT finished_at AS time, endpoints AS \"Endpoints\", findings AS \"Findings\", critical + high AS \"Critical + high\"\nFROM v_run_deltas WHERE $__timeFilter(finished_at) ORDER BY 1"
+          "rawSql": "WITH s AS (SELECT run_id, finished_at, sum(endpoints) AS endpoints, sum(findings) AS findings, sum(critical) AS critical, sum(high) AS high, sum(medium) AS medium\n  FROM v_run_scope_stats WHERE ('__all' IN (${provider:sqlstring}) OR provider IN (${provider:sqlstring})) AND ('__all' IN (${account:sqlstring}) OR account IN (${account:sqlstring})) GROUP BY run_id, finished_at),\nd AS (SELECT s.*, s.endpoints - lag(s.endpoints) OVER (ORDER BY s.run_id) AS endpoints_delta,\n  round(100.0 * (b.endpoints - s.endpoints) / nullif(b.endpoints, 0), 1) AS progress_pct\n  FROM s LEFT JOIN s b ON b.run_id = (SELECT run_id FROM v_baseline))\nSELECT finished_at AS time, endpoints AS \"Endpoints\", findings AS \"Findings\", critical + high AS \"Critical + high\"\nFROM d WHERE $__timeFilter(finished_at) ORDER BY 1"
         }
       ],
       "fieldConfig": {
